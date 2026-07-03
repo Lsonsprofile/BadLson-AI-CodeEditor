@@ -1,4 +1,5 @@
-import { generateCodeResponse, streamCodeResponse } from '../services/geminiService.mjs';
+// backend/controllers/aiController.mjs
+import { generateCodeResponse, streamCodeResponse } from '../services/aiService.mjs';
 
 export async function handleChat(req, res) {
   try {

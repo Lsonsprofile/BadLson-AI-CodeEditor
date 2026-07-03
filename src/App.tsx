@@ -1,7 +1,8 @@
+// src/App.tsx
 import { useState, useEffect } from 'react';
 import { Routes, Route } from 'react-router';
 import Header from './components/Layout/Header';
-import Sidebar from './components/Layout/Sidebar';
+import FileExplorer from './components/Explorer/FileExplorer';
 import Workspace from './components/Layout/Workspace';
 import ChatPanel from './components/AI/ChatPanel';
 import SettingsPanel from './components/Settings/SettingsPanel';
@@ -55,7 +56,7 @@ function StatusBar() {
 function AppLayout() {
   const [showSettings, setShowSettings] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
   const [aiWidth, setAiWidth] = useState(340);
   const [draggingSidebar, setDraggingSidebar] = useState(false);
   const [draggingAi, setDraggingAi] = useState(false);
@@ -100,7 +101,7 @@ function AppLayout() {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (draggingSidebar) {
-        setSidebarWidth(Math.max(180, Math.min(360, e.clientX)));
+        setSidebarWidth(Math.max(220, Math.min(400, e.clientX)));
       }
       if (draggingAi) {
         setAiWidth(Math.max(240, Math.min(420, window.innerWidth - e.clientX - 80)));
@@ -176,9 +177,9 @@ function AppLayout() {
           <>
             <div
               style={{ width: sidebarWidth }}
-              className="shrink-0 min-w-[180px] max-w-[420px] border-r border-[#1e293b] overflow-hidden"
+              className="shrink-0 min-w-[220px] max-w-[400px] border-r border-[#1e293b] overflow-hidden flex flex-col"
             >
-              <Sidebar />
+              <FileExplorer />
             </div>
             <div
               onMouseDown={() => setDraggingSidebar(true)}

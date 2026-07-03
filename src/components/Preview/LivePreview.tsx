@@ -1,45 +1,204 @@
+// src/components/Preview/LivePreview.tsx
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
-import { Globe, RefreshCw, ExternalLink, Maximize2, Minimize2 } from 'lucide-react';
+import { Globe, RefreshCw, ExternalLink, Maximize2, Minimize2, Smartphone, Tablet, Monitor } from 'lucide-react';
 
 export default function LivePreview() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const { files, previewDevice } = useWorkspaceStore();
+  const [scale, setScale] = useState(1);
+  const [iframeContent, setIframeContent] = useState('');
+  const { files, previewDevice, activeFile } = useWorkspaceStore();
+
+  const normalizeFilePath = (path: string) => path.replace(/\\+/g, '/').replace(/\/\/+/g, '/').replace(/^\//, '');
+  const getFolderPath = (path: string) => {
+    const index = path.lastIndexOf('/');
+    return index >= 0 ? `${path.slice(0, index + 1)}` : '';
+  };
+
+  const resolveRelativePath = (relativePath: string, baseFolder: string) => {
+    if (!relativePath) return null;
+    if (/^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/\/|data:)/.test(relativePath)) {
+      return null;
+    }
+
+    const cleanedRelative = relativePath.replace(/^\.\//, '').replace(/^\//, '');
+    const targetParts = baseFolder.split('/').filter(Boolean);
+    const relativeParts = cleanedRelative.split('/').filter(Boolean);
+
+    while (relativeParts.length && relativeParts[0] === '..') {
+      if (targetParts.length > 0) targetParts.pop();
+      relativeParts.shift();
+    }
+
+    const candidate = normalizeFilePath([...targetParts, ...relativeParts].join('/'));
+    return candidate || null;
+  };
+
+  const getFileContent = (relativePath: string, baseFolder: string) => {
+    const resolvedFile = resolveRelativePath(relativePath, baseFolder);
+    if (resolvedFile && files[resolvedFile] !== undefined) {
+      return files[resolvedFile];
+    }
+    const rootResolved = normalizeFilePath(relativePath);
+    return files[rootResolved] || '';
+  };
+
+  const getContentType = (path: string) => {
+    const lower = path.toLowerCase();
+    if (lower.endsWith('.css')) return 'text/css';
+    if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'text/html';
+    if (lower.endsWith('.json')) return 'application/json';
+    if (lower.endsWith('.js') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) return 'application/javascript';
+    if (lower.endsWith('.svg')) return 'image/svg+xml';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.ico')) return 'image/x-icon';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    if (lower.endsWith('.mp3')) return 'audio/mpeg';
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    if (lower.endsWith('.ogg')) return 'audio/ogg';
+    if (lower.endsWith('.ttf')) return 'font/ttf';
+    if (lower.endsWith('.otf')) return 'font/otf';
+    if (lower.endsWith('.woff')) return 'font/woff';
+    if (lower.endsWith('.woff2')) return 'font/woff2';
+    return 'application/octet-stream';
+  };
+
+  const createDataUrl = (path: string, content: string) => {
+    if (content.startsWith('data:')) return content;
+    const type = getContentType(path);
+    if (/^text\//.test(type) || type === 'application/javascript' || type === 'application/json' || type === 'image/svg+xml') {
+      return `data:${type};charset=utf-8,${encodeURIComponent(content)}`;
+    }
+    return '';
+  };
+
+  const getLocalDataUrl = (relativePath: string, baseFolder: string) => {
+    const resolved = resolveRelativePath(relativePath, baseFolder) || normalizeFilePath(relativePath);
+    if (!resolved) return null;
+    const fileContent = files[resolved];
+    if (typeof fileContent !== 'string') return null;
+    return createDataUrl(resolved, fileContent) || null;
+  };
+
+  const rewriteCssAssetUrls = (css: string, cssFolder: string) =>
+    css.replace(/url\((['"]?)(?!https?:|data:|\/\/)([^)'"\s]+)\1\)/gi, (match, quote, assetPath) => {
+      const assetUrl = getLocalDataUrl(assetPath, cssFolder);
+      return assetUrl ? `url(${quote || ''}${assetUrl}${quote || ''})` : match;
+    });
+
+  const inlineLocalStylesheets = (html: string, baseFolder: string) =>
+    html.replace(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi, (match, href) => {
+      const css = getFileContent(href, baseFolder);
+      if (!css) return match;
+      const cssFolder = getFolderPath(resolveRelativePath(href, baseFolder) || normalizeFilePath(href));
+      return `<style>/* Injected CSS from ${href} */\n${escapeHtml(rewriteCssAssetUrls(css, cssFolder))}</style>`;
+    });
+
+  const inlineLocalScripts = (html: string, baseFolder: string) =>
+    html.replace(/<script\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>\s*<\/script>/gi, (match, before, src, after) => {
+      const scriptContent = getFileContent(src, baseFolder);
+      if (!scriptContent) return match;
+      return `<script${before}${after}>${scriptContent}</script>`;
+    });
+
+  const rewriteHtmlSources = (html: string, baseFolder: string) => {
+    const replaceSrc = (match: string, attr: string, quote: string, value: string) => {
+      const assetUrl = getLocalDataUrl(value, baseFolder);
+      return assetUrl ? `${attr}=${quote}${assetUrl}${quote}` : match;
+    };
+
+    html = html.replace(/\b(src|poster|data-src)=(['"])(?!https?:|data:|\/\/)([^"']+)\2/gi, replaceSrc);
+    html = html.replace(/\bsrcset=(['"])([^"']+)\1/gi, (match, quote, value) => {
+      const rewritten = value
+        .split(',')
+        .map((item: string) => {
+          const [url, descriptor] = item.trim().split(/\s+/);
+          const assetUrl = getLocalDataUrl(url, baseFolder);
+          return assetUrl ? `${assetUrl}${descriptor ? ' ' + descriptor : ''}` : item.trim();
+        })
+        .join(', ');
+      return `srcset=${quote}${rewritten}${quote}`;
+    });
+
+    return html;
+  };
+
+  const findPreviewHtmlPath = () => {
+    if (activeFile?.endsWith('.html') && files[activeFile]) {
+      return activeFile;
+    }
+
+    if (activeFile) {
+      const folder = getFolderPath(activeFile);
+      const candidate = normalizeFilePath(`${folder}index.html`);
+      if (files[candidate]) {
+        return candidate;
+      }
+    }
+
+    if (files['index.html']) {
+      return 'index.html';
+    }
+
+    return Object.keys(files).find((path) => path.endsWith('/index.html')) || '';
+  };
 
   const generatePreview = useCallback(() => {
-    const html = files['index.html'] || '<!DOCTYPE html><html><head></head><body></body></html>';
-    const css = files['style.css'] || '';
-    let js = files['script.js'] || '';
+    const htmlPath = findPreviewHtmlPath();
+    const html = htmlPath ? files[htmlPath] : '<!DOCTYPE html><html><head><title>Preview</title></head><body><h1>Hello World</h1><p>Your content will appear here.</p></body></html>';
+    const baseFolder = htmlPath ? getFolderPath(htmlPath) : '';
+    const css = getFileContent('style.css', baseFolder);
+    let js = getFileContent('script.js', baseFolder);
 
-    // Strip TypeScript annotations before injecting into browser
     js = stripTypeScript(js);
 
     let previewHTML = html;
 
-    // Inject CSS
-    if (css) {
+    // Ensure proper viewport meta tag
+    if (!previewHTML.includes('<meta name="viewport"')) {
       previewHTML = previewHTML.replace(
-        /<link[^>]*href=["']style\.css["'][^>]*>/i,
-        `<style>${escapeHtml(css)}</style>`
+        '<head>',
+        '<head><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
       );
-      if (!previewHTML.includes('<style>')) {
-        previewHTML = previewHTML.replace('</head>', `<style>${escapeHtml(css)}</style></head>`);
+    }
+
+    // Inline local stylesheet links and rewrite asset URLs in CSS
+    previewHTML = inlineLocalStylesheets(previewHTML, baseFolder);
+    if (css) {
+      const styleTag = `<style>/* Injected CSS */\n${escapeHtml(rewriteCssAssetUrls(css, baseFolder))}</style>`;
+      if (previewHTML.includes('</head>')) {
+        previewHTML = previewHTML.replace('</head>', styleTag + '</head>');
+      } else {
+        previewHTML = previewHTML.replace('<head>', `<head>${styleTag}`);
       }
     }
+
+    // Inline local script imports, preserving type/module attributes
+    previewHTML = inlineLocalScripts(previewHTML, baseFolder);
+
+    // Rewrite local image, audio, video and data URLs in HTML attributes
+    previewHTML = rewriteHtmlSources(previewHTML, baseFolder);
 
     // Inject JS with error handling wrapper
     if (js) {
       const wrappedJS = `
 <script>
+/* Injected JavaScript */
 (function() {
   'use strict';
   try {
     ${js}
   } catch (err) {
     console.error('Preview script error:', err);
-    var errorDiv = document.createElement('div');
+    const errorDiv = document.createElement('div');
     errorDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#fee2e2;color:#991b1b;padding:12px;font-family:monospace;font-size:13px;z-index:99999;border-bottom:2px solid #ef4444;white-space:pre-wrap;';
     errorDiv.textContent = 'Script Error: ' + err.name + ': ' + err.message + '\\n\\n' + err.stack;
     document.body.appendChild(errorDiv);
@@ -47,40 +206,47 @@ export default function LivePreview() {
 })();
 </script>`;
 
-      previewHTML = previewHTML.replace(
-        /<script[^>]*src=["']script\.js["'][^>]*><\/script>/i,
-        wrappedJS
-      );
-      if (!previewHTML.includes('<script>')) {
-        previewHTML = previewHTML.replace('</body>', wrappedJS + '</body>');
-      }
+      previewHTML = previewHTML.replace(/<script[^>]*src=["'][^"']*script\.js["'][^>]*><\/script>/gi, '');
+      previewHTML = previewHTML.replace('</body>', wrappedJS + '</body>');
     }
 
-    // Add fonts
+    // Add fonts if not present
     if (!previewHTML.includes('fonts.googleapis.com')) {
-      previewHTML = previewHTML.replace(
-        '</head>',
-        `<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet"></head>`
-      );
+      const fontLink = '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">';
+      previewHTML = previewHTML.replace('</head>', fontLink + '</head>');
+    }
+
+    // Ensure html and body tags exist
+    if (!previewHTML.includes('<html')) {
+      previewHTML = `<!DOCTYPE html><html>${previewHTML}</html>`;
+    }
+    if (!previewHTML.includes('<body')) {
+      previewHTML = previewHTML.replace('<html>', '<html><body>');
+      previewHTML = previewHTML.replace('</html>', '</body></html>');
     }
 
     return previewHTML;
-  }, [files]);
+  }, [files, activeFile]);
 
+  // Generate and set iframe content when files or active file change
   useEffect(() => {
     const html = generatePreview();
-    if (iframeRef.current) {
-      iframeRef.current.srcdoc = html;
-    }
+    setIframeContent(html);
   }, [generatePreview]);
 
+  // Apply content to iframe
+  useEffect(() => {
+    if (iframeRef.current && iframeContent) {
+      iframeRef.current.srcdoc = iframeContent;
+    }
+  }, [iframeContent]);
+
+  // Handle refresh events
   useEffect(() => {
     const handleRun = () => {
       setIsRefreshing(true);
       const html = generatePreview();
-      if (iframeRef.current) {
-        iframeRef.current.srcdoc = html;
-      }
+      setIframeContent(html);
       setTimeout(() => setIsRefreshing(false), 500);
     };
 
@@ -88,16 +254,114 @@ export default function LivePreview() {
     return () => window.removeEventListener('run-preview', handleRun);
   }, [generatePreview]);
 
-  const getDeviceStyles = () => {
-    return { width: '100%', height: '100%', maxWidth: '100%' };
+  // Calculate scale to fit device in container
+  useEffect(() => {
+    const calculateScale = () => {
+      if (!containerRef.current || previewDevice === 'desktop') {
+        setScale(1);
+        return;
+      }
+
+      const container = containerRef.current;
+      const containerRect = container.getBoundingClientRect();
+      
+      // Get the actual available space with padding
+      const containerWidth = containerRect.width - 48;
+      const containerHeight = containerRect.height - 48;
+
+      // Device dimensions with bezel
+      const deviceWidth = previewDevice === 'mobile' ? 375 : 768;
+      const deviceHeight = previewDevice === 'mobile' ? 812 : 1024;
+      
+      // Add bezel padding
+      const bezelPadding = 60;
+      const totalWidth = deviceWidth + bezelPadding;
+      const totalHeight = deviceHeight + bezelPadding;
+
+      // Calculate scales
+      const scaleX = containerWidth / totalWidth;
+      const scaleY = containerHeight / totalHeight;
+      
+      // Use the smaller scale to fit both dimensions
+      let fitScale = Math.min(scaleX, scaleY);
+      
+      // Don't scale up beyond 1:1
+      fitScale = Math.min(fitScale, 1);
+      
+      // Ensure minimum visibility
+      fitScale = Math.max(fitScale, 0.1);
+
+      setScale(fitScale);
+    };
+
+    // Initial calculation with delay for DOM readiness
+    const timeoutId = setTimeout(calculateScale, 50);
+    
+    // Use ResizeObserver for container size changes
+    const resizeObserver = new ResizeObserver(() => calculateScale());
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+    
+    window.addEventListener('resize', calculateScale);
+    
+    return () => {
+      clearTimeout(timeoutId);
+      window.removeEventListener('resize', calculateScale);
+      resizeObserver.disconnect();
+    };
+  }, [previewDevice]);
+
+  // Device configuration
+  const getDeviceConfig = () => {
+    switch (previewDevice) {
+      case 'mobile':
+        return {
+          width: 375,
+          height: 812,
+          label: 'Mobile',
+          icon: <Smartphone className="w-3 h-3" />,
+          frameColor: 'border-slate-700',
+          bgColor: 'bg-[#1a1a1a]',
+          notch: true,
+          borderRadius: 'rounded-[40px]',
+          screenRadius: 'rounded-[32px]',
+        };
+      case 'tablet':
+        return {
+          width: 768,
+          height: 1024,
+          label: 'Tablet',
+          icon: <Tablet className="w-3 h-3" />,
+          frameColor: 'border-slate-600',
+          bgColor: 'bg-[#1a1a1a]',
+          notch: false,
+          borderRadius: 'rounded-[30px]',
+          screenRadius: 'rounded-[22px]',
+        };
+      case 'desktop':
+      default:
+        return {
+          width: '100%',
+          height: '100%',
+          label: 'Desktop',
+          icon: <Monitor className="w-3 h-3" />,
+          frameColor: 'border-transparent',
+          bgColor: 'bg-transparent',
+          notch: false,
+          borderRadius: 'rounded-none',
+          screenRadius: 'rounded-none',
+        };
+    }
   };
+
+  const device = getDeviceConfig();
+  const isSimulated = previewDevice !== 'desktop';
 
   const handleRefresh = () => {
     setIsRefreshing(true);
     const html = generatePreview();
-    if (iframeRef.current) {
-      iframeRef.current.srcdoc = html;
-    }
+    setIframeContent(html);
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
@@ -109,86 +373,157 @@ export default function LivePreview() {
   };
 
   return (
-    <div
-      className={`flex flex-col bg-white rounded-sm border border-[#1e293b] overflow-hidden transition-all duration-300 ${
-        isFullscreen ? 'fixed inset-0 z-[100] rounded-none' : 'flex-1 min-h-0 h-full'
-      }`}
-      style={isFullscreen ? undefined : { minHeight: 0 }}
-    >
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[#f8fafc] border-b border-[#e2e8f0] shrink-0">
+    <div className="flex flex-col h-full w-full bg-[#0d1117]">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#161b22] border-b border-[#21262d] shrink-0">
         <div className="flex items-center gap-2">
           <Globe className="w-3.5 h-3.5 text-slate-400" />
-          <span className="text-[11px] font-semibold text-slate-600">Live Preview</span>
+          <span className="text-[11px] font-semibold text-[#c9d1d9]">Preview</span>
+          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#1a2035] text-[9px] text-[#8b949e]">
+            {device.icon}
+            {device.label}
+          </span>
+          {isSimulated && (
+            <span className="text-[9px] text-slate-500">
+              {Math.round(scale * 100)}%
+            </span>
+          )}
           <span className="flex items-center gap-1 ml-2">
             <span className="relative flex h-1.5 w-1.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
             </span>
-            <span className="text-[9px] text-emerald-500 font-medium">Synced</span>
+            <span className="text-[9px] text-emerald-400 font-medium">Live</span>
           </span>
         </div>
         <div className="flex items-center gap-0.5">
-          <button onClick={handleRefresh} className="p-1 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-200 transition" title="Refresh">
+          <button 
+            onClick={handleRefresh} 
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-[#30363d] transition" 
+            title="Refresh"
+          >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={handleOpenNewTab} className="p-1 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-200 transition" title="Open in new tab">
+          <button 
+            onClick={handleOpenNewTab} 
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-[#30363d] transition" 
+            title="Open in new tab"
+          >
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
-          <button onClick={() => setIsFullscreen(!isFullscreen)} className="p-1 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-200 transition" title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+          <button 
+            onClick={() => setIsFullscreen(!isFullscreen)} 
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-[#30363d] transition" 
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
             {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 h-full bg-[#f1f5f9] p-2 overflow-hidden transition-all duration-300">
-        <div className="w-full h-full bg-white rounded shadow-sm border border-slate-200 transition-all duration-300 overflow-hidden" style={getDeviceStyles()}>
-          <iframe
-            ref={iframeRef}
-            className="w-full h-full rounded"
-            sandbox="allow-scripts allow-same-origin allow-modals allow-popups"
-            title="Live Preview"
-          />
-        </div>
+      {/* Preview Area - This container does NOT scroll */}
+      <div 
+        ref={containerRef}
+        className="flex-1 flex items-center justify-center p-2"
+        style={{ 
+          background: isSimulated 
+            ? 'radial-gradient(ellipse at center, #1e293b 0%, #0d1117 70%)' 
+            : '#ffffff',
+          minHeight: '100px',
+          overflow: 'hidden', // Prevent scrolling here
+        }}
+      >
+        {isSimulated ? (
+          // Scaled device frame
+          <div 
+            className="relative flex-shrink-0"
+            style={{
+              width: device.width,
+              height: device.height,
+              transform: `scale(${scale})`,
+              transformOrigin: 'center center',
+            }}
+          >
+            {/* Device bezel */}
+            <div className={`absolute inset-0 ${device.borderRadius} ${device.bgColor} ${device.frameColor} border-[8px] shadow-2xl overflow-hidden`}>
+              {/* Notch (mobile only) */}
+              {device.notch && (
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-36 h-7 bg-black rounded-b-2xl z-20" />
+              )}
+              
+              {/* Screen - THIS is where scrolling happens */}
+              <div 
+                className={`absolute inset-[6px] bg-white overflow-auto`} 
+                style={{ 
+                  borderRadius: device.notch ? '32px' : '22px',
+                }}
+              >
+                <iframe
+                  ref={iframeRef}
+                  style={{
+                    border: 'none',
+                    display: 'block',
+                    width: '100%',
+                    height: '100%',
+                  }}
+                  sandbox="allow-scripts allow-same-origin allow-modals allow-popups"
+                  title="Live Preview"
+                  srcDoc={iframeContent}
+                />
+              </div>
+              
+              {/* Home indicator for mobile */}
+              {device.notch && (
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-36 h-1 bg-slate-600 rounded-full z-20" />
+              )}
+            </div>
+          </div>
+        ) : (
+          // Desktop mode - full screen with scrolling inside
+          <div className="w-full h-full bg-white overflow-auto">
+            <iframe
+              ref={iframeRef}
+              style={{
+                border: 'none',
+                display: 'block',
+                width: '100%',
+                height: '100%',
+              }}
+              sandbox="allow-scripts allow-same-origin allow-modals allow-popups"
+              title="Live Preview"
+              srcDoc={iframeContent}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-// Strip TypeScript type annotations from JavaScript before injecting into iframe
 function stripTypeScript(code: string): string {
   if (!code) return code;
-
   return code
-    // Remove variable type annotations: let x: string = ...
     .replace(/\b(let|const|var)\s+(\w+)\s*:\s*[\w<>\[\]|&]+\s*=/g, '$1 $2 =')
-    // Remove parameter types in arrow function params with => : (param: Type) => {
     .replace(/\(([^)]*)\)\s*:\s*[\w<>\[\]|&]+\s*=>\s*\{/g, (match, params) => {
       const cleanParams = params.replace(/\s*:\s*[\w<>\[\]|&]+/g, '');
       return `(${cleanParams}) => {`;
     })
-    // Remove parameter types in forEach/map callbacks: (section: Element) => {
     .replace(/\(([^)]*)\)\s*=>\s*\{/g, (match, params) => {
       const cleanParams = params.replace(/\s*:\s*[\w<>\[\]|&]+/g, '');
       return `(${cleanParams}) => {`;
     })
-    // Remove parameter types in regular function params: function foo(param: Type)
     .replace(/function\s+(\w+)\s*\(([^)]*)\)/g, (match, name, params) => {
       const cleanParams = params.replace(/\s*:\s*[\w<>\[\]|&]+/g, '');
       return `function ${name}(${cleanParams})`;
     })
-    // Remove 'as Type' casts: (section as HTMLElement)
     .replace(/\(\s*\w+\s+as\s+\w+\s*\)/g, (match) => {
       return match.replace(/\s+as\s+\w+/, '').replace(/[()]/g, '');
     })
-    // Remove standalone 'as Type' casts
     .replace(/\s+as\s+\w+/g, '')
-    // Remove interface declarations
     .replace(/interface\s+\w+\s*\{[^}]*\}/g, '')
-    // Remove type aliases
     .replace(/type\s+\w+\s*=\s*[^;]+;/g, '');
 }
 
-// Helper to prevent XSS in CSS content
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')

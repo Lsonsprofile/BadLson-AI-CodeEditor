@@ -466,9 +466,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setAuthUser: (user) => set({ authUser: user }),
 
       addChatMessage: (role, content) =>
-        set((state) => ({
-          chatHistory: [...state.chatHistory, { role, content, timestamp: Date.now() }],
-        })),
+        set((state) => {
+          const newMessage = { role, content, timestamp: Date.now() };
+          // Keep only last 20 messages to prevent lag and memory bloat
+          const trimmedHistory = [...state.chatHistory, newMessage].slice(-20);
+          return { chatHistory: trimmedHistory };
+        }),
       setIsAiTyping: (typing) => set({ isAiTyping: typing }),
       clearChat: () => set({ chatHistory: [] }),
       deleteFile: (filename) =>
