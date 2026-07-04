@@ -94,12 +94,14 @@ export default function LivePreview() {
       return assetUrl ? `url(${quote || ''}${assetUrl}${quote || ''})` : match;
     });
 
+  // FIX 1: No escapeHtml on CSS inside <style> tags
   const inlineLocalStylesheets = (html: string, baseFolder: string) =>
     html.replace(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi, (match, href) => {
       const css = getFileContent(href, baseFolder);
       if (!css) return match;
       const cssFolder = getFolderPath(resolveRelativePath(href, baseFolder) || normalizeFilePath(href));
-      return `<style>/* Injected CSS from ${href} */\n${escapeHtml(rewriteCssAssetUrls(css, cssFolder))}</style>`;
+      // No escapeHtml here - CSS should not be HTML-escaped
+      return `<style>/* Injected CSS from ${href} */\n${rewriteCssAssetUrls(css, cssFolder)}</style>`;
     });
 
   const inlineLocalScripts = (html: string, baseFolder: string) =>
@@ -170,10 +172,11 @@ export default function LivePreview() {
       );
     }
 
-    // Inline local stylesheet links and rewrite asset URLs in CSS
+    // FIX: Inline local stylesheet links - NO escapeHtml on CSS!
     previewHTML = inlineLocalStylesheets(previewHTML, baseFolder);
     if (css) {
-      const styleTag = `<style>/* Injected CSS */\n${escapeHtml(rewriteCssAssetUrls(css, baseFolder))}</style>`;
+      // FIX: No escapeHtml here - CSS should not be HTML-escaped
+      const styleTag = `<style>/* Injected CSS */\n${rewriteCssAssetUrls(css, baseFolder)}</style>`;
       if (previewHTML.includes('</head>')) {
         previewHTML = previewHTML.replace('</head>', styleTag + '</head>');
       } else {
@@ -181,10 +184,10 @@ export default function LivePreview() {
       }
     }
 
-    // Inline local script imports, preserving type/module attributes
+    // Inline local script imports
     previewHTML = inlineLocalScripts(previewHTML, baseFolder);
 
-    // Rewrite local image, audio, video and data URLs in HTML attributes
+    // Rewrite local asset URLs in HTML
     previewHTML = rewriteHtmlSources(previewHTML, baseFolder);
 
     // Inject JS with error handling wrapper
@@ -500,30 +503,29 @@ export default function LivePreview() {
   );
 }
 
+// FIX 2: Safer stripTypeScript
 function stripTypeScript(code: string): string {
   if (!code) return code;
+  
+  // Remove TypeScript-specific syntax that breaks JS execution
   return code
-    .replace(/\b(let|const|var)\s+(\w+)\s*:\s*[\w<>\[\]|&]+\s*=/g, '$1 $2 =')
-    .replace(/\(([^)]*)\)\s*:\s*[\w<>\[\]|&]+\s*=>\s*\{/g, (match, params) => {
-      const cleanParams = params.replace(/\s*:\s*[\w<>\[\]|&]+/g, '');
-      return `(${cleanParams}) => {`;
-    })
-    .replace(/\(([^)]*)\)\s*=>\s*\{/g, (match, params) => {
-      const cleanParams = params.replace(/\s*:\s*[\w<>\[\]|&]+/g, '');
-      return `(${cleanParams}) => {`;
-    })
-    .replace(/function\s+(\w+)\s*\(([^)]*)\)/g, (match, name, params) => {
-      const cleanParams = params.replace(/\s*:\s*[\w<>\[\]|&]+/g, '');
-      return `function ${name}(${cleanParams})`;
-    })
-    .replace(/\(\s*\w+\s+as\s+\w+\s*\)/g, (match) => {
-      return match.replace(/\s+as\s+\w+/, '').replace(/[()]/g, '');
-    })
-    .replace(/\s+as\s+\w+/g, '')
-    .replace(/interface\s+\w+\s*\{[^}]*\}/g, '')
-    .replace(/type\s+\w+\s*=\s*[^;]+;/g, '');
+    // Remove type annotations on variable declarations: let x: string = ...
+    .replace(/\b(let|const|var)\s+(\w+)\s*:\s*[^=;]+(?==)/g, '$1 $2')
+    // Remove type annotations in function parameters
+    .replace(/(\w+)\s*:\s*[\w<>\[\]|&]+\s*(?=[,)])/g, '$1')
+    // Remove return type annotations
+    .replace(/\)\s*:\s*[\w<>\[\]|&]+\s*(?=\{|;|=>)/g, ')')
+    // Remove interface declarations
+    .replace(/interface\s+\w+\s*\{[^}]*\}/gs, '')
+    // Remove type aliases
+    .replace(/type\s+\w+\s*=\s*[^;]+;/gs, '')
+    // Remove generic type parameters
+    .replace(/<\s*[\w<>\[\]|&,\s]+\s*>/g, '')
+    // Remove 'as' type assertions
+    .replace(/\s+as\s+[\w<>\[\]|&]+/g, '');
 }
 
+// FIX 3: escapeHtml - only for text content, not CSS
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
