@@ -24,13 +24,24 @@ console.log('=================');
 const app = express();
 const PORT = process.env.PORT || 5002;
 
-app.use(cors());
+// CORS: allow frontend origins
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://badlson-ai-codeeditor.onrender.com';
+app.use(cors({
+  origin: [FRONTEND_URL, 'http://localhost:5173', 'http://localhost:3000'],
+  credentials: true
+}));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ===== DIAGNOSTIC ENDPOINT =====
+// Health check (Render uses this)
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Diagnostic endpoint
 app.get('/api/diagnose', async (req, res) => {
   try {
     const apiKey = process.env.GROQ_API_KEY;
@@ -62,16 +73,13 @@ app.get('/api/diagnose', async (req, res) => {
     });
   }
 });
-// ===== END DIAGNOSTIC ENDPOINT =====
 
+// API routes
 app.use('/api/ai', aiRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/upload', uploadRoutes);
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
+// Error handler
 app.use((err, req, res, next) => {
   console.error('Server Error:', err);
   res.status(500).json({ error: err.message || 'Internal Server Error' });
@@ -84,12 +92,6 @@ server.on('error', (err) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚀 Server running on http://0.0.0.0:${PORT}`);
-  console.log(`📡 API Base URL: http://localhost:${PORT}/api`);
-  console.log(`🤖 AI Endpoint: http://localhost:${PORT}/api/ai`);
-  console.log(`📁 Projects Endpoint: http://localhost:${PORT}/api/projects`);
-  console.log(`📤 Upload Endpoint: http://localhost:${PORT}/api/upload`);
-  console.log(`🔍 Diagnostic: http://localhost:${PORT}/api/diagnose\n`);
 });
 
 process.on('SIGINT', () => {
