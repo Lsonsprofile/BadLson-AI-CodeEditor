@@ -3,10 +3,11 @@ import { generateCodeResponse, streamCodeResponse } from '../services/aiService.
 
 export async function handleChat(req, res) {
   try {
-    const { projectFiles, message, chatHistory } = req.body;
+    const { projectFiles, message, chatHistory, provider } = req.body;
 
     console.log('=== handleChat DEBUG ===');
     console.log('Received message:', message);
+    console.log('Provider:', provider || 'gemini (default)');
     console.log('Project files count:', Object.keys(projectFiles || {}).length);
     console.log('Chat history length:', (chatHistory || []).length);
     console.log('========================');
@@ -19,13 +20,15 @@ export async function handleChat(req, res) {
     const response = await generateCodeResponse(
       projectFiles || {},
       message,
-      chatHistory || []
+      chatHistory || [],
+      provider || 'gemini'  // default to gemini
     );
     console.log('AI response received, length:', response?.length);
 
     res.json({
       success: true,
       response,
+      provider: provider || 'gemini',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -40,7 +43,7 @@ export async function handleChat(req, res) {
 
 export async function handleStream(req, res) {
   try {
-    const { projectFiles, message, chatHistory } = req.body;
+    const { projectFiles, message, chatHistory, provider } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
@@ -55,7 +58,8 @@ export async function handleStream(req, res) {
       chatHistory || [],
       (chunk) => {
         res.write(chunk);
-      }
+      },
+      provider || 'gemini'  // default to gemini
     );
 
     res.end();
@@ -67,17 +71,19 @@ export async function handleStream(req, res) {
 
 export async function handleAnalyze(req, res) {
   try {
-    const { projectFiles } = req.body;
+    const { projectFiles, provider } = req.body;
 
     const response = await generateCodeResponse(
       projectFiles || {},
       'Analyze this code for errors, bugs, and potential improvements. Provide specific fixes.',
-      []
+      [],
+      provider || 'gemini'
     );
 
     res.json({
       success: true,
       response,
+      provider: provider || 'gemini',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -88,17 +94,19 @@ export async function handleAnalyze(req, res) {
 
 export async function handleExplain(req, res) {
   try {
-    const { projectFiles, filename } = req.body;
+    const { projectFiles, filename, provider } = req.body;
 
     const response = await generateCodeResponse(
       projectFiles || {},
       `Explain the code in ${filename || 'all files'} in detail. Break down the logic and structure.`,
-      []
+      [],
+      provider || 'gemini'
     );
 
     res.json({
       success: true,
       response,
+      provider: provider || 'gemini',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

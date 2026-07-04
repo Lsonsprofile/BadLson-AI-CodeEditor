@@ -1,4 +1,6 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// src/services/api.ts
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
 
 interface FetchOptions {
   method?: string;
@@ -47,19 +49,25 @@ async function fetchWithError(url: string, options: FetchOptions = {}): Promise<
   }
 }
 
-// AI API
+// AI API - Single sendChatMessage function with provider support
 export async function sendChatMessage(
   projectFiles: Record<string, string>,
   message: string,
-  chatHistory: ChatMessage[] = []
+  chatHistory: ChatMessage[] = [],
+  provider: 'gemini' | 'groq' = 'gemini'
 ): Promise<ApiResponse> {
   const response = await fetchWithError(`${API_BASE_URL}/ai/chat`, {
     method: 'POST',
-    body: JSON.stringify({ projectFiles, message, chatHistory }),
+    body: JSON.stringify({ projectFiles, message, chatHistory, provider }),
   });
 
-  if (!response.success || typeof response.response !== 'string') {
-    throw new Error(response.error || 'Invalid AI response from server');
+  // Handle different response formats
+  if (response.response !== undefined) {
+    return response;
+  }
+  
+  if (response.success === false) {
+    throw new Error(response.error || 'AI request failed');
   }
 
   return response;
@@ -117,6 +125,18 @@ export async function updateProjectFiles(id: string, files: Record<string, strin
     method: 'PUT',
     body: JSON.stringify({ files }),
   });
+}
+
+// Health check
+export async function checkApiHealth(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`, {
+      method: 'GET',
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 // Upload API

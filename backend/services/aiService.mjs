@@ -2,17 +2,28 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// Initialize Gemini client
+const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
 if (!GROQ_API_KEY) {
   console.error('❌ GROQ_API_KEY not found in environment');
 } else {
   console.log('✅ GROQ_API_KEY loaded, length:', GROQ_API_KEY.length);
+}
+
+if (!GEMINI_API_KEY) {
+  console.error('❌ GEMINI_API_KEY not found in environment');
+} else {
+  console.log('✅ GEMINI_API_KEY loaded, length:', GEMINI_API_KEY.length);
 }
 
 const SYSTEM_INSTRUCTION = `You are a coding assistant in BadLson_AI_code Editor.
@@ -45,9 +56,11 @@ function getFallbackResponse() {
   return responses[Math.floor(Math.random() * responses.length)];
 }
 
+// ─── GROQ ───────────────────────────────────────────────────────────
+
 async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-instruct') {
   if (!GROQ_API_KEY) {
-    throw new Error('GROQ_API_KEY not set in backend/.env');
+    throw new Error('GROQ_API_KEY not set');
   }
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -78,77 +91,117 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
   return data.choices[0].message.content;
 }
 
-async function createInteraction(inputText, chatHistory = []) {
-  const messages = [
-    { role: 'system', content: SYSTEM_INSTRUCTION },
-  ];
+// ─── GEMINI ─────────────────────────────────────────────────────────
 
-  const trimmedHistory = chatHistory.slice(-5);
-  for (const msg of trimmedHistory) {
-    messages.push({
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: msg.content,
-    });
+async function callGemini(prompt, model = 'gemini-2.5-flash') {
+  if (!geminiClient) {
+    throw new Error('GEMINI_API_KEY not set');
   }
 
-  messages.push({ role: 'user', content: inputText });
+  const result = await geminiClient.models.generateContent({
+    model,
+    contents: [
+      { role: 'user', parts: [{ text: SYSTEM_INSTRUCTION + '\n\n' + prompt }] }
+    ],
+    config: {
+      maxOutputTokens: 2048,
+      temperature: 0.7,
+    },
+  });
 
-  // Only models enabled in your Groq project
-  const models = [
-    'meta-llama/llama-4-scout-17b-16e-instruct',
-    'openai/gpt-oss-20b',
-    'qwen/qwen3-32b',
-    'qwen/qwen3.6-27b',
-  ];
-
-  let lastError;
-
-  for (const model of models) {
-    try {
-      console.log(`Trying Groq model: ${model}`);
-      const response = await callGroq(messages, model);
-      
-      if (!response) continue;
-
-      let cleaned = response
-        .replace(/text\s*Copy\s*Apply/gi, '')
-        .replace(/\bCopy\s*Apply\b/gi, '')
-        .replace(/```text\s*\n/g, '\n')
-        .replace(/```\s*text\s*/g, '');
-
-      console.log(`✅ Success with ${model}, length: ${cleaned.length}`);
-      return cleaned;
-
-    } catch (error) {
-      console.warn(`❌ Model ${model} failed:`, error.message);
-      lastError = error;
-      continue;
-    }
-  }
-
-  console.error('All Groq models failed:', lastError);
-  return getFallbackResponse();
+  return result.text;
 }
 
-export async function generateCodeResponse(projectFiles, userMessage, chatHistory = []) {
-  try {
-    const prompt = `Files:\n${Object.entries(projectFiles)
-      .map(([filename, content]) => `--- ${filename} ---\n${content.substring(0, 2000)}${content.length > 2000 ? '\n...' : ''}`)
-      .join('\n\n')}\n\nUser: ${userMessage}\n\nReply in 1-2 sentences. Use \`\`\`css or \`\`\`html for code only.`;
+// ─── MAIN FUNCTIONS ───────────────────────────────────────────────
 
-    return await createInteraction(prompt, chatHistory);
+function buildPrompt(projectFiles, userMessage) {
+  const filesContext = Object.entries(projectFiles)
+    .map(([filename, content]) => `--- ${filename} ---\n${content.substring(0, 2000)}${content.length > 2000 ? '\n...' : ''}`)
+    .join('\n\n');
+
+  return `Files:\n${filesContext}\n\nUser: ${userMessage}\n\nReply in 1-2 sentences. Use \`\`\`css or \`\`\`html for code only.`;
+}
+
+function cleanResponse(text) {
+  if (!text) return '';
+  return text
+    .replace(/text\s*Copy\s*Apply/gi, '')
+    .replace(/\bCopy\s*Apply\b/gi, '')
+    .replace(/```text\s*\n/g, '\n')
+    .replace(/```\s*text\s*/g, '');
+}
+
+export async function generateCodeResponse(projectFiles, userMessage, chatHistory = [], provider = 'gemini') {
+  try {
+    const prompt = buildPrompt(projectFiles, userMessage);
+    
+    const messages = [
+      { role: 'system', content: SYSTEM_INSTRUCTION },
+    ];
+
+    const trimmedHistory = chatHistory.slice(-5);
+    for (const msg of trimmedHistory) {
+      messages.push({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.content,
+      });
+    }
+
+    messages.push({ role: 'user', content: prompt });
+
+    // Try preferred provider first, fallback to other
+    const providers = provider === 'gemini' 
+      ? [
+          () => callGemini(prompt, 'gemini-2.5-flash'),
+          () => callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct'),
+        ]
+      : [
+          () => callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct'),
+          () => callGemini(prompt, 'gemini-2.5-flash'),
+        ];
+
+    let lastError;
+    for (const callFn of providers) {
+      try {
+        const response = await callFn();
+        if (!response) continue;
+        const cleaned = cleanResponse(response);
+        console.log(`✅ Success with provider, length: ${cleaned.length}`);
+        return cleaned;
+      } catch (error) {
+        console.warn(`❌ Provider failed:`, error.message);
+        lastError = error;
+        continue;
+      }
+    }
+
+    console.error('All AI providers failed:', lastError);
+    return getFallbackResponse();
   } catch (error) {
     console.error('generateCodeResponse error:', error);
     return getFallbackResponse();
   }
 }
 
-export async function streamCodeResponse(projectFiles, userMessage, chatHistory = [], onChunk) {
+export async function streamCodeResponse(projectFiles, userMessage, chatHistory = [], onChunk, provider = 'gemini') {
   try {
-    const prompt = `Files:\n${Object.entries(projectFiles)
-      .map(([filename, content]) => `--- ${filename} ---\n${content.substring(0, 2000)}${content.length > 2000 ? '\n...' : ''}`)
-      .join('\n\n')}\n\nUser: ${userMessage}\n\nReply in 1-2 sentences. Use \`\`\`css or \`\`\`html for code only.`;
+    const prompt = buildPrompt(projectFiles, userMessage);
 
+    // Gemini doesn't support streaming the same way, so use Groq for streaming
+    if (provider === 'gemini') {
+      const response = await generateCodeResponse(projectFiles, userMessage, chatHistory, 'gemini');
+      if (onChunk) {
+        // Simulate streaming by sending chunks
+        const chunks = response.split(' ');
+        for (const chunk of chunks) {
+          onChunk(chunk + ' ');
+          await new Promise(r => setTimeout(r, 20));
+        }
+      }
+      return response;
+    }
+
+    // Groq streaming
     const messages = [
       { role: 'system', content: SYSTEM_INSTRUCTION },
       ...chatHistory.slice(-5).map(m => ({
@@ -205,11 +258,7 @@ export async function streamCodeResponse(projectFiles, userMessage, chatHistory 
       }
     }
 
-    return fullText
-      .replace(/text\s*Copy\s*Apply/gi, '')
-      .replace(/\bCopy\s*Apply\b/gi, '')
-      .replace(/```text\s*\n/g, '\n')
-      .replace(/```\s*text\s*/g, '');
+    return cleanResponse(fullText);
   } catch (error) {
     console.error('streamCodeResponse error:', error);
     const fallback = getFallbackResponse();
@@ -219,24 +268,35 @@ export async function streamCodeResponse(projectFiles, userMessage, chatHistory 
 }
 
 export async function testConnection() {
-  try {
-    const messages = [
-      { role: 'system', content: 'You are a helpful assistant.' },
-      { role: 'user', content: 'Say "OK" in one word.' },
-    ];
-    
-    const response = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct');
-    return { 
-      status: 'ok', 
-      service: 'Groq',
-      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-      response: response.trim()
-    };
-  } catch (error) {
-    return { 
-      status: 'error', 
-      error: error.message,
-      suggestion: 'Check your API key and model permissions at https://console.groq.com/settings/project/limits'
-    };
+  const results = {};
+
+  // Test Groq
+  if (GROQ_API_KEY) {
+    try {
+      const messages = [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: 'Say "OK" in one word.' },
+      ];
+      const response = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct');
+      results.groq = { status: 'ok', response: response.trim() };
+    } catch (error) {
+      results.groq = { status: 'error', error: error.message };
+    }
+  } else {
+    results.groq = { status: 'not_configured' };
   }
+
+  // Test Gemini
+  if (geminiClient) {
+    try {
+      const response = await callGemini('Say "OK" in one word.', 'gemini-2.5-flash');
+      results.gemini = { status: 'ok', response: response.trim() };
+    } catch (error) {
+      results.gemini = { status: 'error', error: error.message };
+    }
+  } else {
+    results.gemini = { status: 'not_configured' };
+  }
+
+  return results;
 }
