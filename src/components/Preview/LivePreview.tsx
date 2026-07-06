@@ -1,6 +1,7 @@
 // src/components/Preview/LivePreview.tsx
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
+import { getContent, getBlob } from '../../lib/fileStorage';
 import { Globe, RefreshCw, ExternalLink, Maximize2, Minimize2, Smartphone, Tablet, Monitor } from 'lucide-react';
 
 export default function LivePreview() {
@@ -37,13 +38,28 @@ export default function LivePreview() {
     return candidate || null;
   };
 
-  const getFileContent = (relativePath: string, baseFolder: string) => {
+  // Async version: fetches from IndexedDB or falls back to Zustand
+  const getFileContentAsync = async (relativePath: string, baseFolder: string): Promise<string> => {
     const resolvedFile = resolveRelativePath(relativePath, baseFolder);
+    
+    // Check Zustand first (for newly created files)
     if (resolvedFile && files[resolvedFile] !== undefined) {
-      return files[resolvedFile];
+      return files[resolvedFile] as string;
     }
+    
     const rootResolved = normalizeFilePath(relativePath);
-    return files[rootResolved] || '';
+    if (files[rootResolved] !== undefined) {
+      return files[rootResolved] as string;
+    }
+
+    // Fallback to IndexedDB
+    if (resolvedFile) {
+      const content = await getContent(resolvedFile);
+      if (content !== null) return content;
+    }
+    
+    const rootContent = await getContent(rootResolved);
+    return rootContent || '';
   };
 
   const getContentType = (path: string) => {
@@ -80,83 +96,175 @@ export default function LivePreview() {
     return '';
   };
 
-  const getLocalDataUrl = (relativePath: string, baseFolder: string) => {
+  // Async version for blob assets (images, fonts, etc.)
+  const getLocalDataUrlAsync = async (relativePath: string, baseFolder: string): Promise<string | null> => {
     const resolved = resolveRelativePath(relativePath, baseFolder) || normalizeFilePath(relativePath);
     if (!resolved) return null;
-    const fileContent = files[resolved];
-    if (typeof fileContent !== 'string') return null;
-    return createDataUrl(resolved, fileContent) || null;
+
+    // Check if it's an image type stored as blob
+    const type = getContentType(resolved);
+    if (type.startsWith('image/') || type.startsWith('font/') || type.startsWith('audio/') || type.startsWith('video/')) {
+      const blob = await getBlob(resolved);
+      if (blob) {
+        return URL.createObjectURL(blob);
+      }
+    }
+
+    // Fallback to text content
+    const fileContent = files[resolved] as string | undefined;
+    if (typeof fileContent === 'string') {
+      return createDataUrl(resolved, fileContent) || null;
+    }
+
+    const dbContent = await getContent(resolved);
+    if (dbContent !== null) {
+      return createDataUrl(resolved, dbContent) || null;
+    }
+
+    return null;
   };
 
-  const rewriteCssAssetUrls = (css: string, cssFolder: string) =>
-    css.replace(/url\((['"]?)(?!https?:|data:|\/\/)([^)'"\s]+)\1\)/gi, (match, quote, assetPath) => {
-      const assetUrl = getLocalDataUrl(assetPath, cssFolder);
-      return assetUrl ? `url(${quote || ''}${assetUrl}${quote || ''})` : match;
-    });
+  const rewriteCssAssetUrls = async (css: string, cssFolder: string): Promise<string> => {
+    const matches = [...css.matchAll(/url\((['"]?)(?!https?:|data:|\/\/)([^)'"\s]+)\1\)/gi)];
+    let result = css;
+    
+    for (const match of matches) {
+      const [fullMatch, quote, assetPath] = match;
+      const assetUrl = await getLocalDataUrlAsync(assetPath, cssFolder);
+      if (assetUrl) {
+        result = result.replace(fullMatch, `url(${quote || ''}${assetUrl}${quote || ''})`);
+      }
+    }
+    
+    return result;
+  };
 
-  const inlineLocalStylesheets = (html: string, baseFolder: string) =>
-    html.replace(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi, (match, href) => {
-      const css = getFileContent(href, baseFolder);
-      if (!css) return match;
+  const inlineLocalStylesheets = async (html: string, baseFolder: string): Promise<string> => {
+    const matches = [...html.matchAll(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi)];
+    let result = html;
+    
+    for (const match of matches) {
+      const [fullMatch, href] = match;
+      const css = await getFileContentAsync(href, baseFolder);
+      if (!css) continue;
+      
       const cssFolder = getFolderPath(resolveRelativePath(href, baseFolder) || normalizeFilePath(href));
-      return `<style>${rewriteCssAssetUrls(css, cssFolder)}</style>`;
-    });
+      const rewrittenCss = await rewriteCssAssetUrls(css, cssFolder);
+      result = result.replace(fullMatch, `<style>${rewrittenCss}</style>`);
+    }
+    
+    return result;
+  };
 
-  const inlineLocalScripts = (html: string, baseFolder: string) =>
-    html.replace(/<script\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>\s*<\/script>/gi, (match, before, src, after) => {
-      const scriptContent = getFileContent(src, baseFolder);
-      if (!scriptContent) return match;
-      return `<script${before}${after}>${scriptContent}</script>`;
-    });
+  const inlineLocalScripts = async (html: string, baseFolder: string): Promise<string> => {
+    const matches = [...html.matchAll(/<script\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>\s*<\/script>/gi)];
+    let result = html;
+    
+    for (const match of matches) {
+      const [fullMatch, before, src, after] = match;
+      const scriptContent = await getFileContentAsync(src, baseFolder);
+      if (!scriptContent) continue;
+      result = result.replace(fullMatch, `<script${before}${after}>${scriptContent}</script>`);
+    }
+    
+    return result;
+  };
 
-  const rewriteHtmlSources = (html: string, baseFolder: string) => {
-    const replaceSrc = (match: string, attr: string, quote: string, value: string) => {
-      const assetUrl = getLocalDataUrl(value, baseFolder);
-      return assetUrl ? `${attr}=${quote}${assetUrl}${quote}` : match;
-    };
+  const rewriteHtmlSources = async (html: string, baseFolder: string): Promise<string> => {
+    let result = html;
 
-    html = html.replace(/\b(src|poster|data-src)=(['"])(?!https?:|data:|\/\/)([^"']+)\2/gi, replaceSrc);
-    html = html.replace(/\bsrcset=(['"])([^"']+)\1/gi, (match, quote, value) => {
-      const rewritten = value
-        .split(',')
-        .map((item: string) => {
+    // Replace src/poster/data-src attributes
+    const srcMatches = [...result.matchAll(/\b(src|poster|data-src)=(['"])(?!https?:|data:|\/\/)([^"']+)\2/gi)];
+    for (const match of srcMatches) {
+      const [fullMatch, attr, quote, value] = match;
+      const assetUrl = await getLocalDataUrlAsync(value, baseFolder);
+      if (assetUrl) {
+        result = result.replace(fullMatch, `${attr}=${quote}${assetUrl}${quote}`);
+      }
+    }
+
+    // Replace srcset attributes
+    const srcsetMatches = [...result.matchAll(/\bsrcset=(['"])([^"']+)\1/gi)];
+    for (const match of srcsetMatches) {
+      const [fullMatch, quote, value] = match;
+      const rewritten = await Promise.all(
+        value.split(',').map(async (item: string) => {
           const [url, descriptor] = item.trim().split(/\s+/);
-          const assetUrl = getLocalDataUrl(url, baseFolder);
+          const assetUrl = await getLocalDataUrlAsync(url, baseFolder);
           return assetUrl ? `${assetUrl}${descriptor ? ' ' + descriptor : ''}` : item.trim();
         })
-        .join(', ');
-      return `srcset=${quote}${rewritten}${quote}`;
-    });
+      );
+      result = result.replace(fullMatch, `srcset=${quote}${rewritten.join(', ')}${quote}`);
+    }
 
-    return html;
+    return result;
   };
 
   const findPreviewHtmlPath = () => {
-    if (activeFile?.endsWith('.html') && files[activeFile]) {
+    if (activeFile?.endsWith('.html') && files[activeFile] !== undefined) {
       return activeFile;
     }
 
     if (activeFile) {
       const folder = getFolderPath(activeFile);
       const candidate = normalizeFilePath(`${folder}index.html`);
-      if (files[candidate]) {
+      if (files[candidate] !== undefined) {
         return candidate;
       }
     }
 
-    if (files['index.html']) {
+    if (files['index.html'] !== undefined) {
       return 'index.html';
     }
 
     return Object.keys(files).find((path) => path.endsWith('/index.html')) || '';
   };
 
-  const generatePreview = useCallback(() => {
+  // ✅ FIXED: Helper function to safely wrap user scripts with DOM ready check
+  const wrapUserScript = (js: string): string => {
+    return `
+<script>
+(function() {
+  'use strict';
+  
+  function safeExecute() {
+    try {
+      ${js}
+    } catch (err) {
+      console.error('Preview Script Error:', err);
+      const errorDiv = document.createElement('div');
+      errorDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#fee2e2;color:#991b1b;padding:12px 16px;font-family:monospace;font-size:13px;z-index:99999;border-bottom:3px solid #ef4444;white-space:pre-wrap;max-height:50vh;overflow:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15);';
+      errorDiv.innerHTML = '<div style="font-weight:bold;margin-bottom:4px;">⚠️ JavaScript Error</div><div style="color:#b91c1c;">' + err.name + ': ' + err.message + '</div><div style="margin-top:4px;font-size:12px;color:#991b1b;opacity:0.8;">' + (err.stack || 'No stack trace') + '</div>';
+      document.body.appendChild(errorDiv);
+    }
+  }
+  
+  // Wait for DOM to be ready before executing user code
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', safeExecute);
+  } else {
+    safeExecute();
+  }
+})();
+</script>`;
+  };
+
+  const generatePreview = useCallback(async () => {
     const htmlPath = findPreviewHtmlPath();
-    const html = htmlPath && files[htmlPath] ? files[htmlPath] : '';
+    
+    // Fetch HTML content from IndexedDB or Zustand
+    let html = '';
+    if (htmlPath) {
+      if (files[htmlPath] !== undefined) {
+        html = files[htmlPath] as string;
+      } else {
+        html = await getContent(htmlPath) || '';
+      }
+    }
+    
     const baseFolder = htmlPath ? getFolderPath(htmlPath) : '';
-    const css = getFileContent('style.css', baseFolder);
-    let js = getFileContent('script.js', baseFolder);
+    const css = await getFileContentAsync('style.css', baseFolder);
+    let js = await getFileContentAsync('script.js', baseFolder);
 
     js = stripTypeScript(js);
 
@@ -189,9 +297,10 @@ export default function LivePreview() {
       );
     }
 
-    previewHTML = inlineLocalStylesheets(previewHTML, baseFolder);
+    previewHTML = await inlineLocalStylesheets(previewHTML, baseFolder);
+    
     if (css) {
-      const styleTag = `<style>${rewriteCssAssetUrls(css, baseFolder)}</style>`;
+      const styleTag = `<style>${await rewriteCssAssetUrls(css, baseFolder)}</style>`;
       if (previewHTML.includes('</head>')) {
         previewHTML = previewHTML.replace('</head>', styleTag + '</head>');
       } else {
@@ -199,26 +308,12 @@ export default function LivePreview() {
       }
     }
 
-    previewHTML = inlineLocalScripts(previewHTML, baseFolder);
-    previewHTML = rewriteHtmlSources(previewHTML, baseFolder);
+    previewHTML = await inlineLocalScripts(previewHTML, baseFolder);
+    previewHTML = await rewriteHtmlSources(previewHTML, baseFolder);
 
+    // ✅ FIXED: Use the wrapped script with DOM ready check
     if (js) {
-      const wrappedJS = `
-<script>
-(function() {
-  'use strict';
-  try {
-    ${js}
-  } catch (err) {
-    console.error('Preview script error:', err);
-    const errorDiv = document.createElement('div');
-    errorDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#fee2e2;color:#991b1b;padding:12px;font-family:monospace;font-size:13px;z-index:99999;border-bottom:2px solid #ef4444;white-space:pre-wrap;';
-    errorDiv.textContent = 'Script Error: ' + err.name + ': ' + err.message + '\\n\\n' + err.stack;
-    document.body.appendChild(errorDiv);
-  }
-})();
-</script>`;
-
+      const wrappedJS = wrapUserScript(js);
       previewHTML = previewHTML.replace(/<script[^>]*src=["'][^"']*script\.js["'][^>]*><\/script>/gi, '');
       previewHTML = previewHTML.replace('</body>', wrappedJS + '</body>');
     }
@@ -239,9 +334,20 @@ export default function LivePreview() {
     return previewHTML;
   }, [files, activeFile]);
 
+  // Regenerate preview when dependencies change
   useEffect(() => {
-    const html = generatePreview();
-    setIframeContent(html);
+    let cancelled = false;
+    
+    const buildPreview = async () => {
+      const html = await generatePreview();
+      if (!cancelled) {
+        setIframeContent(html);
+      }
+    };
+    
+    buildPreview();
+    
+    return () => { cancelled = true; };
   }, [generatePreview]);
 
   useEffect(() => {
@@ -251,9 +357,9 @@ export default function LivePreview() {
   }, [iframeContent]);
 
   useEffect(() => {
-    const handleRun = () => {
+    const handleRun = async () => {
       setIsRefreshing(true);
-      const html = generatePreview();
+      const html = await generatePreview();
       setIframeContent(html);
       setTimeout(() => setIsRefreshing(false), 500);
     };
@@ -343,15 +449,15 @@ export default function LivePreview() {
   const device = getDeviceConfig();
   const isSimulated = previewDevice !== 'desktop';
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    const html = generatePreview();
+    const html = await generatePreview();
     setIframeContent(html);
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
-  const handleOpenNewTab = () => {
-    const html = generatePreview();
+  const handleOpenNewTab = async () => {
+    const html = await generatePreview();
     const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     window.open(url, '_blank');

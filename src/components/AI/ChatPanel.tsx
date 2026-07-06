@@ -19,7 +19,7 @@ import {
   Globe,
 } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
-import { sendChatMessage, type ChatApiResponse } from '../../services/api';
+import { sendChatMessageWithStore, type ChatApiResponse } from '../../services/api';
 import Message from './Message';
 
 const MAX_MESSAGES = 20;
@@ -235,15 +235,10 @@ export default function ChatPanel() {
     setErrorMessage(null);
 
     try {
-      const projectFiles: Record<string, string> = {};
-      Object.entries(files).forEach(([filename, content]) => {
-        if (content) projectFiles[filename] = String(content);
-      });
-
       const recentHistory = chatHistory.slice(-10);
       
-      const response = await sendChatMessage(
-        projectFiles, 
+      // Use sendChatMessageWithStore which fetches file contents from IndexedDB
+      const response = await sendChatMessageWithStore(
         userMessage, 
         recentHistory,
         aiProvider.provider,
@@ -267,7 +262,7 @@ export default function ChatPanel() {
       setIsLoading(false);
       setIsAiTyping(false);
     }
-  }, [isLoading, files, activeFile, chatHistory, addChatMessage, setIsAiTyping, aiProvider]);
+  }, [isLoading, activeFile, chatHistory, addChatMessage, setIsAiTyping, aiProvider]);
 
   const handleClear = useCallback(() => {
     const messageCount = chatHistory.length;

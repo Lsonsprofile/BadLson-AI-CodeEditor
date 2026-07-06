@@ -89,6 +89,231 @@ let cachedFreeModels = null;
 let lastModelFetch = 0;
 const MODEL_CACHE_TTL_MS = 1000 * 60 * 30;
 
+// ─── TOKEN BUDGET CONFIG ────────────────────────────────────────────
+const TOKEN_BUDGET = {
+  MAX_TOTAL_CHARS: 100000,      // ~25k tokens (rough estimate: 4 chars = 1 token)
+  MAX_FILE_CHARS: 8000,         // Cap individual files at ~2k tokens
+  MAX_FILES: 50,                // Max number of files to include
+  TREE_MAX_FILES: 200,          // Max files to show in tree structure
+};
+
+// ─── SMART FILE SELECTION ───────────────────────────────────────────
+
+/**
+ * Selects the most relevant files from a large project for AI context.
+ * With 45k files, we can't send everything — we need to be smart.
+ */
+export function selectRelevantFiles(projectFiles, userMessage, activeFile = null) {
+  const entries = Object.entries(projectFiles);
+  const totalFiles = entries.length;
+  
+  if (totalFiles === 0) return {};
+
+  // If small project (< MAX_FILES), send everything
+  if (totalFiles <= TOKEN_BUDGET.MAX_FILES) {
+    return Object.fromEntries(
+      entries.map(([name, content]) => [name, truncateContent(content)])
+    );
+  }
+
+  const msgLower = userMessage.toLowerCase();
+  const msgWords = new Set(msgLower.split(/\W+/).filter(w => w.length > 2));
+  
+  // Score each file by relevance
+  const scoredFiles = entries.map(([filename, content]) => {
+    let score = 0;
+    const fileLower = filename.toLowerCase();
+    const contentLower = content.toLowerCase();
+    const contentWords = contentLower.split(/\W+/).filter(w => w.length > 2);
+    const contentWordSet = new Set(contentWords);
+    
+    // Active file gets massive boost
+    if (activeFile && (filename === activeFile || fileLower.includes(activeFile.toLowerCase()))) {
+      score += 1000;
+    }
+    
+    // Filename matches query words
+    for (const word of msgWords) {
+      if (fileLower.includes(word)) score += 50;
+    }
+    
+    // Content matches query words
+    let contentMatches = 0;
+    for (const word of msgWords) {
+      if (contentWordSet.has(word)) contentMatches++;
+    }
+    score += contentMatches * 10;
+    
+    // Prefer smaller files (more likely to be focused modules)
+    const sizeBonus = Math.max(0, 5000 - content.length) / 100;
+    score += sizeBonus;
+    
+    // Entry point files get bonus
+    if (filename === 'index.html' || filename === 'index.js' || filename === 'app.js' || 
+        filename === 'main.js' || filename === 'main.css' || filename.endsWith('/index.js')) {
+      score += 30;
+    }
+    
+    // Config files usually not relevant
+    if (filename.includes('package.json') || filename.includes('.gitignore') || 
+        filename.includes('README') || filename.includes('node_modules')) {
+      score -= 50;
+    }
+    
+    return { filename, content, score };
+  });
+
+  // Sort by score descending
+  scoredFiles.sort((a, b) => b.score - a.score);
+  
+  // Take top N files
+  const selected = scoredFiles.slice(0, TOKEN_BUDGET.MAX_FILES);
+  
+  // Always include active file if it exists and wasn't in top N
+  if (activeFile && projectFiles[activeFile] && !selected.find(f => f.filename === activeFile)) {
+    selected.pop(); // Remove lowest scored
+    selected.push({ 
+      filename: activeFile, 
+      content: projectFiles[activeFile], 
+      score: 9999 
+    });
+  }
+  
+  // Always include index.html if it exists (entry point)
+  if (projectFiles['index.html'] && !selected.find(f => f.filename === 'index.html')) {
+    const idxEntry = scoredFiles.find(f => f.filename === 'index.html');
+    if (idxEntry) {
+      selected.pop();
+      selected.push(idxEntry);
+    }
+  }
+
+  return Object.fromEntries(
+    selected.map(({ filename, content }) => [filename, truncateContent(content)])
+  );
+}
+
+/**
+ * Truncates file content to stay within token budget per file.
+ */
+function truncateContent(content) {
+  if (!content || content.length <= TOKEN_BUDGET.MAX_FILE_CHARS) return content;
+  
+  const lines = content.split('\n');
+  let result = '';
+  let charCount = 0;
+  
+  // Take first N lines that fit
+  for (const line of lines) {
+    if (charCount + line.length + 1 > TOKEN_BUDGET.MAX_FILE_CHARS) {
+      result += `\n... [truncated, ${content.length - charCount} more chars, ${lines.length - result.split('\n').length} more lines]`;
+      break;
+    }
+    result += line + '\n';
+    charCount += line.length + 1;
+  }
+  
+  return result.trimEnd();
+}
+
+/**
+ * Builds a compact file tree showing only up to TREE_MAX_FILES.
+ */
+function buildCompactTree(filenames, selectedFiles) {
+  const selectedSet = new Set(Object.keys(selectedFiles));
+  const allFiles = filenames.slice(0, TOKEN_BUDGET.TREE_MAX_FILES);
+  const remaining = Math.max(0, filenames.length - TOKEN_BUDGET.TREE_MAX_FILES);
+  
+  const tree = {};
+  
+  for (const filepath of allFiles) {
+    const parts = filepath.split('/');
+    let current = tree;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (i === parts.length - 1) {
+        current[part] = selectedSet.has(filepath) ? '★' : null;
+      } else {
+        current[part] = current[part] || {};
+        current = current[part];
+      }
+    }
+  }
+
+  function render(node, prefix = '') {
+    const entries = Object.entries(node);
+    let result = '';
+    for (let i = 0; i < entries.length; i++) {
+      const [name, child] = entries[i];
+      const isLast = i === entries.length - 1;
+      const connector = isLast ? '└── ' : '├── ';
+      const childPrefix = prefix + (isLast ? '    ' : '│   ');
+      
+      if (child === null) {
+        result += prefix + connector + name + '\n';
+      } else if (child === '★') {
+        result += prefix + connector + name + ' ★\n';
+      } else {
+        result += prefix + connector + name + '/\n';
+        result += render(child, childPrefix);
+      }
+    }
+    return result;
+  }
+
+  let output = render(tree).trim() || '(no files)';
+  if (remaining > 0) {
+    output += `\n... and ${remaining} more files (showing ${TOKEN_BUDGET.TREE_MAX_FILES} of ${filenames.length})`;
+  }
+  
+  return output;
+}
+
+// ─── PROMPT BUILDING ────────────────────────────────────────────────
+
+function buildPrompt(projectFiles, userMessage, activeFile = null) {
+  const fileEntries = Object.entries(projectFiles);
+  
+  if (fileEntries.length === 0) {
+    return `User: ${userMessage}\n\n(No files open currently)`;
+  }
+
+  // For large projects, select only relevant files
+  const selectedFiles = selectRelevantFiles(projectFiles, userMessage, activeFile);
+  const allFilenames = Object.keys(projectFiles);
+  
+  const tree = buildCompactTree(allFilenames, selectedFiles);
+  
+  const filesContext = Object.entries(selectedFiles).map(([filename, content]) => {
+    const lines = content.split('\n');
+    return `=== FILE: ${filename} (${lines.length} lines) ===\n\`\`\`\n${content}\n\`\`\``;
+  }).join('\n\n');
+
+  const activeHint = activeFile 
+    ? `\n\nCURRENTLY EDITING: ${activeFile}\nThis is the file the user is most likely asking about.` 
+    : '';
+
+  const selectionNote = fileEntries.length > TOKEN_BUDGET.MAX_FILES
+    ? `\n\nNOTE: This project has ${fileEntries.length} files. Only the most relevant ${Object.keys(selectedFiles).length} files are shown above. If you need to see other files, ask specifically.`
+    : '';
+
+  return `PROJECT STRUCTURE:
+${tree}
+
+${filesContext}${activeHint}${selectionNote}
+
+INSTRUCTION: ${userMessage}
+
+REMEMBER:
+- Reference files by their full path (e.g., "Lson/index.js")
+- When editing nested files, use format: \`\`\`edit:Lson/index.js
+- Only show changed code in \`\`\`edit:filepath\`\`\` blocks
+- Do NOT output full files unless explicitly asked
+- The user is currently looking at: ${activeFile || 'no specific file'}`;
+}
+
+// ─── OPENROUTER ─────────────────────────────────────────────────────
+
 export async function fetchOpenRouterFreeModels() {
   try {
     const now = Date.now();
@@ -288,6 +513,8 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
   throw lastError || new Error('All OpenRouter stream models failed');
 }
 
+// ─── GROQ ─────────────────────────────────────────────────────────
+
 async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-instruct') {
   if (!GROQ_API_KEY) {
     throw new Error('GROQ_API_KEY not set');
@@ -325,6 +552,67 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
   };
 }
 
+async function streamGroq(messages, onChunk) {
+  if (!GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY not set');
+  }
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      messages,
+      temperature: 0.7,
+      max_tokens: 4096,
+      stream: true,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Groq streaming error: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n').filter(line => line.trim().startsWith('data:'));
+
+    for (const line of lines) {
+      const data = line.replace('data:', '').trim();
+      if (data === '[DONE]') continue;
+
+      try {
+        const parsed = JSON.parse(data);
+        const content = parsed.choices?.[0]?.delta?.content;
+        if (content) {
+          fullText += content;
+          if (onChunk) onChunk(content);
+        }
+      } catch {
+        // Skip invalid JSON
+      }
+    }
+  }
+
+  return {
+    content: cleanResponse(fullText),
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    provider: 'groq',
+  };
+}
+
+// ─── GEMINI ─────────────────────────────────────────────────────────
+
 async function callGemini(prompt, model = 'gemini-2.5-flash') {
   if (!geminiClient) {
     throw new Error('GEMINI_API_KEY not set');
@@ -347,6 +635,8 @@ async function callGemini(prompt, model = 'gemini-2.5-flash') {
     provider: 'gemini',
   };
 }
+
+// ─── RESPONSE PARSING ───────────────────────────────────────────────
 
 export function parseAiResponse(response) {
   if (!response) return { message: '', edits: [] };
@@ -411,81 +701,6 @@ export function applyEdits(projectFiles, edits) {
   return { updatedFiles, applied, failed };
 }
 
-function buildPrompt(projectFiles, userMessage, activeFile = null) {
-  const fileEntries = Object.entries(projectFiles);
-  
-  if (fileEntries.length === 0) {
-    return `User: ${userMessage}\n\n(No files open currently)`;
-  }
-
-  const tree = buildFileTree(fileEntries.map(([name]) => name));
-  
-  const filesContext = fileEntries.map(([filename, content]) => {
-    const lines = content.split('\n');
-    const truncated = content.length > 4000 
-      ? content.substring(0, 4000) + `\n... [truncated, ${content.length - 4000} more chars]`
-      : content;
-    return `=== FILE: ${filename} (${lines.length} lines) ===\n\`\`\`\n${truncated}\n\`\`\``;
-  }).join('\n\n');
-
-  const activeHint = activeFile 
-    ? `\n\nCURRENTLY EDITING: ${activeFile}\nThis is the file the user is most likely asking about.` 
-    : '';
-
-  return `PROJECT STRUCTURE:
-${tree}
-
-${filesContext}${activeHint}
-
-INSTRUCTION: ${userMessage}
-
-REMEMBER:
-- Reference files by their full path (e.g., "Lson/index.js")
-- When editing nested files, use format: \`\`\`edit:Lson/index.js
-- Only show changed code in \`\`\`edit:filepath\`\`\` blocks
-- Do NOT output full files unless explicitly asked
-- The user is currently looking at: ${activeFile || 'no specific file'}`;
-}
-
-function buildFileTree(filenames) {
-  const tree = {};
-  
-  for (const filepath of filenames) {
-    const parts = filepath.split('/');
-    let current = tree;
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      if (i === parts.length - 1) {
-        current[part] = null;
-      } else {
-        current[part] = current[part] || {};
-        current = current[part];
-      }
-    }
-  }
-
-  function render(node, prefix = '') {
-    const entries = Object.entries(node);
-    let result = '';
-    for (let i = 0; i < entries.length; i++) {
-      const [name, child] = entries[i];
-      const isLast = i === entries.length - 1;
-      const connector = isLast ? '└── ' : '├── ';
-      const childPrefix = prefix + (isLast ? '    ' : '│   ');
-      
-      if (child === null) {
-        result += prefix + connector + name + '\n';
-      } else {
-        result += prefix + connector + name + '/\n';
-        result += render(child, childPrefix);
-      }
-    }
-    return result;
-  }
-
-  return render(tree).trim() || '(no files)';
-}
-
 function cleanResponse(text) {
   if (!text) return '';
   return text
@@ -494,6 +709,8 @@ function cleanResponse(text) {
     .replace(/```text\s*\n/g, '\n')
     .replace(/```\s*text\s*/g, '');
 }
+
+// ─── PROVIDER CHAIN ─────────────────────────────────────────────────
 
 function getProviderChain(preferredProvider = 'openrouter') {
   const allProviders = ['openrouter', 'groq', 'gemini'];
@@ -512,6 +729,8 @@ function getProviderChain(preferredProvider = 'openrouter') {
     }
   });
 }
+
+// ─── MAIN GENERATION ────────────────────────────────────────────────
 
 export async function generateCodeResponse(projectFiles, userMessage, chatHistory = [], provider = 'openrouter', activeFile = null) {
   try {
@@ -622,64 +841,7 @@ export async function streamCodeResponse(projectFiles, userMessage, chatHistory 
   }
 }
 
-async function streamGroq(messages, onChunk) {
-  if (!GROQ_API_KEY) {
-    throw new Error('GROQ_API_KEY not set');
-  }
-
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${GROQ_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-      messages,
-      temperature: 0.7,
-      max_tokens: 4096,
-      stream: true,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Groq streaming error: ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let fullText = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    const chunk = decoder.decode(value);
-    const lines = chunk.split('\n').filter(line => line.trim().startsWith('data:'));
-
-    for (const line of lines) {
-      const data = line.replace('data:', '').trim();
-      if (data === '[DONE]') continue;
-
-      try {
-        const parsed = JSON.parse(data);
-        const content = parsed.choices?.[0]?.delta?.content;
-        if (content) {
-          fullText += content;
-          if (onChunk) onChunk(content);
-        }
-      } catch {
-        // Skip invalid JSON
-      }
-    }
-  }
-
-  return {
-    content: cleanResponse(fullText),
-    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-    provider: 'groq',
-  };
-}
+// ─── HEALTH CHECKS ──────────────────────────────────────────────────
 
 export async function testConnection() {
   const results = {};

@@ -35,9 +35,20 @@ app.use(cors({
 }));
 
 // ─── BODY PARSING ───────────────────────────────────────────────────
-// INCREASED LIMIT for full file contents with nested folders
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// INCREASED LIMIT for large projects — 45k files can be ~200MB+ of JSON
+// But we also add middleware to warn about oversized requests
+app.use(express.json({ limit: '250mb' }));
+app.use(express.urlencoded({ extended: true, limit: '250mb' }));
+
+// Log warning for very large requests (helps debug 45k file issues)
+app.use((req, res, next) => {
+  const contentLength = parseInt(req.headers['content-length'] || '0', 10);
+  if (contentLength > 50 * 1024 * 1024) { // 50MB
+    console.warn(`⚠️ Large request detected: ${(contentLength / 1024 / 1024).toFixed(1)}MB from ${req.path}`);
+    console.warn(`   This may cause memory issues. Consider sending only relevant files.`);
+  }
+  next();
+});
 
 // Static uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

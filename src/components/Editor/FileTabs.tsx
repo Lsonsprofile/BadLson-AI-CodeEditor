@@ -1,9 +1,10 @@
+// src/components/Editor/FileTabs.tsx
 import { useState } from 'react';
 import { FileCode, Layout, Type, Braces, Image, Plus, X } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 
 export default function FileTabs() {
-  const { files, activeFile, openFile, setActiveFile, closeFile, updateFile } = useWorkspaceStore();
+  const { openFiles, activeFile, openFile, closeFile, updateFile } = useWorkspaceStore();
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
 
@@ -27,16 +28,13 @@ export default function FileTabs() {
 
   return (
     <div className="flex items-center gap-1 px-2 py-1 bg-[#0e121f] border-b border-[#1e293b]">
-      {Object.keys(files).map((filename) => {
+      {openFiles.map((filename) => {
         const isActive = activeFile === filename;
 
         return (
           <button
             key={filename}
-            onClick={() => {
-              setActiveFile(filename);
-              openFile(filename);
-            }}
+            onClick={() => openFile(filename)}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] transition-all ${
               isActive
                 ? 'bg-[#1e293b] text-slate-200'
@@ -45,15 +43,13 @@ export default function FileTabs() {
           >
             {getFileIcon(filename)}
             <span className="hidden sm:inline">{filename}</span>
-            {isActive && (
-              <X
-                className="w-3 h-3 ml-1 opacity-50 hover:opacity-100 cursor-pointer"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeFile(filename);
-                }}
-              />
-            )}
+            <X
+              className="w-3 h-3 ml-1 opacity-50 hover:opacity-100 cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation();
+                closeFile(filename);
+              }}
+            />
           </button>
         );
       })}

@@ -1,9 +1,10 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type { editor as MonacoEditorType } from 'monaco-editor';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { getFileLanguage } from '../../utils/formatter';
 import { formatHTML, formatCSS, formatJS } from '../../utils/formatter';
+import { getContent, saveContent } from '../../lib/fileStorage';
 
 export default function MonacoEditorComponent() {
   const editorRef = useRef<MonacoEditorType.IStandaloneCodeEditor | null>(null);
@@ -14,8 +15,30 @@ export default function MonacoEditorComponent() {
     editorOptions,
   } = useWorkspaceStore();
 
-  const currentContent = files[activeFile] || '';
+  const [currentContent, setCurrentContent] = useState('');
   const language = getFileLanguage(activeFile);
+
+  // Load content from IndexedDB when active file changes
+  useEffect(() => {
+    if (!activeFile) {
+      setCurrentContent('');
+      return;
+    }
+
+    // First check Zustand (for newly created files not yet in IndexedDB)
+    const zustandContent = (files as Record<string, string>)[activeFile];
+    if (zustandContent !== undefined) {
+      setCurrentContent(zustandContent);
+      // Also sync to IndexedDB
+      saveContent(activeFile, zustandContent).catch(console.error);
+      return;
+    }
+
+    // Fallback to IndexedDB
+    getContent(activeFile).then((content) => {
+      setCurrentContent(content || '');
+    }).catch(console.error);
+  }, [activeFile, files]);
 
   const handleEditorDidMount = useCallback((editor: MonacoEditorType.IStandaloneCodeEditor) => {
     editorRef.current = editor;
@@ -38,16 +61,24 @@ export default function MonacoEditorComponent() {
       else if (lang === 'javascript') formatted = formatJS(content);
 
       editorRef.current.setValue(formatted);
+      // Save to both Zustand and IndexedDB
       updateFile(activeFile, formatted);
+      saveContent(activeFile, formatted).catch(console.error);
     };
 
     window.addEventListener('format-code', handleFormat);
+    return () => {
+      window.removeEventListener('format-code', handleFormat);
+    };
   }, [activeFile, updateFile]);
 
   const handleChange = useCallback(
     (value: string | undefined) => {
-      if (value !== undefined) {
+      if (value !== undefined && activeFile) {
+        // Update Zustand for immediate UI feedback
         updateFile(activeFile, value);
+        // Save to IndexedDB for persistence
+        saveContent(activeFile, value).catch(console.error);
       }
     },
     [activeFile, updateFile]
@@ -55,12 +86,20 @@ export default function MonacoEditorComponent() {
 
   useEffect(() => {
     if (editorRef.current) {
-      const currentValue = editorRef.current.getValue();
-      if (currentValue !== currentContent) {
+      const editorValue = editorRef.current.getValue();
+      if (editorValue !== currentContent) {
         editorRef.current.setValue(currentContent);
       }
     }
-  }, [activeFile]);
+  }, [currentContent]);
+
+  if (!activeFile) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-slate-500 text-xs">
+        Select a file to start editing
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#111625]">

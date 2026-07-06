@@ -1,4 +1,6 @@
 // src/services/api.ts
+import { getContent } from '../lib/fileStorage';
+import { useWorkspaceStore } from '../store/workspaceStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
 
@@ -90,6 +92,60 @@ async function fetchWithError(url: string, options: FetchOptions = {}): Promise<
   }
 }
 
+// ─── INDEXEDDB HELPERS ─────────────────────────────────────────────
+
+/**
+ * Fetches file contents from IndexedDB (with Zustand fallback) for all files in the store.
+ * Use this before sending files to the AI backend.
+ */
+export async function buildProjectFilesFromStore(): Promise<Record<string, string>> {
+  const { files } = useWorkspaceStore.getState();
+  const filePaths = Object.keys(files);
+  const result: Record<string, string> = {};
+
+  // For small projects (< 1000 files), fetch all from IndexedDB
+  // For large projects, we might want to be selective, but for now fetch all
+  const batchSize = 100;
+  for (let i = 0; i < filePaths.length; i += batchSize) {
+    const batch = filePaths.slice(i, i + batchSize);
+    const contents = await Promise.all(
+      batch.map(async (path) => {
+        // Check Zustand first (newly created files, small files)
+        const zustandContent = (files as Record<string, string>)[path];
+        if (zustandContent !== undefined && zustandContent !== '') {
+          return { path, content: zustandContent };
+        }
+        // Fallback to IndexedDB
+        const dbContent = await getContent(path);
+        return { path, content: dbContent || '' };
+      })
+    );
+    
+    for (const { path, content } of contents) {
+      result[path] = content;
+    }
+
+    // Yield to UI every batch
+    if (i + batchSize < filePaths.length) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Fetches content for a specific file from IndexedDB or Zustand.
+ */
+export async function getFileContentAsync(path: string): Promise<string> {
+  const { files } = useWorkspaceStore.getState();
+  const zustandContent = (files as Record<string, string>)[path];
+  if (zustandContent !== undefined) return zustandContent;
+  
+  const dbContent = await getContent(path);
+  return dbContent || '';
+}
+
 // ─── AI API ─────────────────────────────────────────────────────────
 
 export type AiProvider = 'gemini' | 'groq' | 'openrouter';
@@ -117,6 +173,21 @@ export async function sendChatMessage(
   return response as unknown as ChatApiResponse;
 }
 
+/**
+ * Convenience wrapper: fetches file contents from IndexedDB then sends to AI.
+ * Use this instead of sendChatMessage() when working with large projects.
+ */
+export async function sendChatMessageWithStore(
+  message: string,
+  chatHistory: ChatMessage[] = [],
+  provider: AiProvider = 'openrouter',
+  preferredModel?: string | null,
+  activeFile?: string | null
+): Promise<ChatApiResponse> {
+  const projectFiles = await buildProjectFilesFromStore();
+  return sendChatMessage(projectFiles, message, chatHistory, provider, preferredModel, activeFile);
+}
+
 export async function analyzeCode(
   projectFiles: Record<string, string>, 
   provider: AiProvider = 'openrouter',
@@ -126,6 +197,17 @@ export async function analyzeCode(
     method: 'POST',
     body: JSON.stringify({ projectFiles, provider, activeFile }),
   });
+}
+
+/**
+ * Convenience wrapper: fetches file contents from IndexedDB then analyzes.
+ */
+export async function analyzeCodeWithStore(
+  provider: AiProvider = 'openrouter',
+  activeFile?: string | null
+): Promise<ApiResponse> {
+  const projectFiles = await buildProjectFilesFromStore();
+  return analyzeCode(projectFiles, provider, activeFile);
 }
 
 export async function explainCode(
@@ -138,6 +220,18 @@ export async function explainCode(
     method: 'POST',
     body: JSON.stringify({ projectFiles, filename, provider, activeFile }),
   });
+}
+
+/**
+ * Convenience wrapper: fetches file contents from IndexedDB then explains.
+ */
+export async function explainCodeWithStore(
+  filename: string,
+  provider: AiProvider = 'openrouter',
+  activeFile?: string | null
+): Promise<ApiResponse> {
+  const projectFiles = await buildProjectFilesFromStore();
+  return explainCode(projectFiles, filename, provider, activeFile);
 }
 
 export async function getAiModels(): Promise<AiModelsResponse> {
