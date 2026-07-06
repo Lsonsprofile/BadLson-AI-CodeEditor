@@ -10,40 +10,59 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-// Initialize Gemini client
 const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
 if (!GROQ_API_KEY) {
-  console.error('❌ GROQ_API_KEY not found in environment');
+  console.error('GROQ_API_KEY not found');
 } else {
-  console.log('✅ GROQ_API_KEY loaded, length:', GROQ_API_KEY.length);
+  console.log('GROQ_API_KEY loaded, length:', GROQ_API_KEY.length);
 }
 
 if (!GEMINI_API_KEY) {
-  console.error('❌ GEMINI_API_KEY not found in environment');
+  console.error('GEMINI_API_KEY not found');
 } else {
-  console.log('✅ GEMINI_API_KEY loaded, length:', GEMINI_API_KEY.length);
+  console.log('GEMINI_API_KEY loaded, length:', GEMINI_API_KEY.length);
 }
 
-const SYSTEM_INSTRUCTION = `You are a coding assistant in BadLson_AI_code Editor.
+if (!OPENROUTER_API_KEY) {
+  console.error('OPENROUTER_API_KEY not found');
+} else {
+  console.log('OPENROUTER_API_KEY loaded, length:', OPENROUTER_API_KEY.length);
+}
 
-ABSOLUTE RULES - NEVER BREAK THESE:
-1. MAXIMUM 2 sentences for any explanation.
-2. NO bullet points. NO numbered lists. NO "Step 1" etc.
-3. NO "text Copy Apply" or any action labels in your response.
-4. NO "Why this works" or "Here is how" sections.
-5. NO markdown tables. EVER.
-6. Use code blocks ONLY with triple backticks.
-7. NEVER wrap code explanations in \`\`\`text blocks. Only actual code goes in code blocks.
-8. If the user asks "how do I add color", just give the CSS. Don't explain CSS theory.
-9. Casual tone. "Yeah" or "Sure" is fine.
-10. Assume the user is a beginner. One thing at a time.
+const SYSTEM_INSTRUCTION = `You are a Senior Full-Stack Developer and coding assistant in BadLson_AI_code Editor.
 
-CRITICAL:
-- JavaScript: plain ES6+ only, NO TypeScript.
-- CSS: standard CSS only.
-- HTML: standard HTML5 only.`;
+Your job is to help the user write, debug, and improve code. You understand complex questions and can work with multiple files, nested folders, and large projects.
+
+HOW TO EDIT FILES:
+When the user asks you to change, fix, update, or add code to ANY file, you MUST use this EXACT format:
+
+\`\`\`edit:FULL_FILE_PATH
+// the complete new code for this file
+\`\`\`
+
+Examples:
+- \`\`\`edit:index.html
+- \`\`\`edit:Lson/index.js
+- \`\`\`edit:components/Header.tsx
+- \`\`\`edit:src/styles/main.css
+
+RULES:
+- ALWAYS use \`\`\`edit:path for code changes. Never use plain \`\`\`javascript or \`\`\`css for edits.
+- If the user asks about code, explain clearly and thoroughly.
+- If the user asks for a feature, provide complete working code.
+- Reference files by their FULL PATH from the project root.
+- Only output the changed/new code inside edit blocks, not full files unless asked.
+- You can suggest changes to multiple files in one response.
+- Be precise. Do not guess. If you need more info, ask.
+
+TECH STACK:
+- JavaScript: ES6+
+- CSS: standard CSS, Tailwind
+- HTML: HTML5
+- React when relevant`;
 
 function getFallbackResponse() {
   const responses = [
@@ -56,7 +75,218 @@ function getFallbackResponse() {
   return responses[Math.floor(Math.random() * responses.length)];
 }
 
-// ─── GROQ ───────────────────────────────────────────────────────────
+const DEFAULT_FREE_MODELS = [
+  'google/gemma-4-26b-it:free',
+  'google/gemma-4-31b-it:free',
+  'nvidia/llama-3.1-nemotron-70b-instruct:free',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'deepseek/deepseek-chat:free',
+  'mistralai/mistral-small-3.1-24b-instruct:free',
+  'qwen/qwen-2.5-72b-instruct:free',
+];
+
+let cachedFreeModels = null;
+let lastModelFetch = 0;
+const MODEL_CACHE_TTL_MS = 1000 * 60 * 30;
+
+export async function fetchOpenRouterFreeModels() {
+  try {
+    const now = Date.now();
+    if (cachedFreeModels && (now - lastModelFetch) < MODEL_CACHE_TTL_MS) {
+      return cachedFreeModels;
+    }
+
+    const response = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: OPENROUTER_API_KEY ? {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      } : {},
+    });
+
+    if (!response.ok) {
+      console.warn('Failed to fetch OpenRouter models, using defaults');
+      return DEFAULT_FREE_MODELS;
+    }
+
+    const data = await response.json();
+    
+    const freeModels = data.data
+      ?.filter(m => {
+        const isFreeSlug = m.id?.endsWith(':free');
+        const isZeroPrice = m.pricing?.prompt === '0' && m.pricing?.completion === '0';
+        const isZeroNum = parseFloat(m.pricing?.prompt) === 0 && parseFloat(m.pricing?.completion) === 0;
+        return isFreeSlug || isZeroPrice || isZeroNum;
+      })
+      .map(m => m.id)
+      .filter(id => id) || [];
+
+    const merged = freeModels.length > 0 
+      ? [...freeModels, ...DEFAULT_FREE_MODELS.filter(m => !freeModels.includes(m))]
+      : DEFAULT_FREE_MODELS;
+
+    cachedFreeModels = merged;
+    lastModelFetch = now;
+    
+    console.log(`OpenRouter free models refreshed: ${merged.length} models available`);
+    return merged;
+  } catch (error) {
+    console.warn('Error fetching OpenRouter models:', error.message);
+    return DEFAULT_FREE_MODELS;
+  }
+}
+
+async function callOpenRouter(messages, preferredModel = null) {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY not set');
+  }
+
+  const freeModels = await fetchOpenRouterFreeModels();
+  const modelsToTry = preferredModel 
+    ? [preferredModel, ...freeModels.filter(m => m !== preferredModel)]
+    : freeModels;
+
+  let lastError;
+
+  for (const model of modelsToTry) {
+    try {
+      console.log(`Trying OpenRouter model: ${model}`);
+      
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'http://localhost:5002',
+          'X-OpenRouter-Title': 'BadLson AI Code Editor',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.7,
+          max_tokens: 4096,
+          route: 'fallback',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (response.status === 429 || response.status === 503 || response.status === 404) {
+          console.warn(`Model ${model} unavailable (${response.status}), trying next...`);
+          lastError = new Error(`OpenRouter ${model}: ${errorText}`);
+          continue;
+        }
+        throw new Error(`OpenRouter API error ${response.status}: ${errorText}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+        throw new Error('Invalid response from OpenRouter');
+      }
+
+      console.log(`OpenRouter success with model: ${model}`);
+      return {
+        content: data.choices[0].message.content,
+        model: data.model || model,
+        provider: 'openrouter',
+      };
+    } catch (error) {
+      console.warn(`OpenRouter model ${model} failed:`, error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('All OpenRouter models failed');
+}
+
+async function streamOpenRouter(messages, onChunk, preferredModel = null) {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY not set');
+  }
+
+  const freeModels = await fetchOpenRouterFreeModels();
+  const modelsToTry = preferredModel 
+    ? [preferredModel, ...freeModels.filter(m => m !== preferredModel)]
+    : freeModels;
+
+  let lastError;
+
+  for (const model of modelsToTry) {
+    try {
+      console.log(`Trying OpenRouter stream with model: ${model}`);
+      
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'http://localhost:5002',
+          'X-OpenRouter-Title': 'BadLson AI Code Editor',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.7,
+          max_tokens: 4096,
+          stream: true,
+          route: 'fallback',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (response.status === 429 || response.status === 503 || response.status === 404) {
+          console.warn(`Model ${model} unavailable (${response.status}), trying next...`);
+          lastError = new Error(`OpenRouter ${model}: ${errorText}`);
+          continue;
+        }
+        throw new Error(`OpenRouter streaming error ${response.status}: ${errorText}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = '';
+      let actualModel = model;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n').filter(line => line.trim().startsWith('data:'));
+
+        for (const line of lines) {
+          const data = line.replace('data:', '').trim();
+          if (data === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.model) actualModel = parsed.model;
+            
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              fullText += content;
+              if (onChunk) onChunk(content);
+            }
+          } catch {
+            // Skip invalid JSON
+          }
+        }
+      }
+
+      console.log(`OpenRouter stream success with model: ${actualModel}`);
+      return {
+        content: cleanResponse(fullText),
+        model: actualModel,
+        provider: 'openrouter',
+      };
+    } catch (error) {
+      console.warn(`OpenRouter stream model ${model} failed:`, error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('All OpenRouter stream models failed');
+}
 
 async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-instruct') {
   if (!GROQ_API_KEY) {
@@ -73,7 +303,7 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
       model,
       messages,
       temperature: 0.7,
-      max_tokens: 2048,
+      max_tokens: 4096,
     }),
   });
 
@@ -88,10 +318,12 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
     throw new Error('Invalid response from Groq');
   }
 
-  return data.choices[0].message.content;
+  return {
+    content: data.choices[0].message.content,
+    model: data.model || model,
+    provider: 'groq',
+  };
 }
-
-// ─── GEMINI ─────────────────────────────────────────────────────────
 
 async function callGemini(prompt, model = 'gemini-2.5-flash') {
   if (!geminiClient) {
@@ -104,22 +336,154 @@ async function callGemini(prompt, model = 'gemini-2.5-flash') {
       { role: 'user', parts: [{ text: SYSTEM_INSTRUCTION + '\n\n' + prompt }] }
     ],
     config: {
-      maxOutputTokens: 2048,
+      maxOutputTokens: 4096,
       temperature: 0.7,
     },
   });
 
-  return result.text;
+  return {
+    content: result.text,
+    model,
+    provider: 'gemini',
+  };
 }
 
-// ─── MAIN FUNCTIONS ───────────────────────────────────────────────
+export function parseAiResponse(response) {
+  if (!response) return { message: '', edits: [] };
 
-function buildPrompt(projectFiles, userMessage) {
-  const filesContext = Object.entries(projectFiles)
-    .map(([filename, content]) => `--- ${filename} ---\n${content.substring(0, 2000)}${content.length > 2000 ? '\n...' : ''}`)
-    .join('\n\n');
+  const editRegex = /```edit:([^\n]+)\n([\s\S]*?)```/g;
+  const edits = [];
+  let match;
+  
+  while ((match = editRegex.exec(response)) !== null) {
+    edits.push({
+      filename: match[1].trim(),
+      code: match[2].trim()
+    });
+  }
 
-  return `Files:\n${filesContext}\n\nUser: ${userMessage}\n\nReply in 1-2 sentences. Use \`\`\`css or \`\`\`html for code only.`;
+  let message = response
+    .replace(editRegex, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return { message, edits };
+}
+
+export function applyEdits(projectFiles, edits) {
+  const updatedFiles = { ...projectFiles };
+  const applied = [];
+  const failed = [];
+
+  for (const edit of edits) {
+    const { filename, code } = edit;
+    
+    if (!updatedFiles.hasOwnProperty(filename)) {
+      updatedFiles[filename] = code;
+      applied.push({ filename, type: 'created' });
+      continue;
+    }
+
+    const original = updatedFiles[filename];
+    
+    if (code.length < original.length * 0.8) {
+      const normalizedCode = code.replace(/\s+/g, ' ').trim();
+      const normalizedOriginal = original.replace(/\s+/g, ' ').trim();
+      
+      if (normalizedOriginal.includes(normalizedCode)) {
+        applied.push({ filename, type: 'unchanged' });
+        continue;
+      }
+    }
+
+    if (code.includes('<!DOCTYPE') || code.includes('<html') || 
+        code.includes('export default') || code.includes('function') ||
+        code.length > original.length * 0.5) {
+      updatedFiles[filename] = code;
+      applied.push({ filename, type: 'replaced' });
+    } else {
+      updatedFiles[filename] = original + `\n\n/* AI SUGGESTION for ${filename}:\n${code}\n*/`;
+      applied.push({ filename, type: 'appended' });
+      failed.push({ filename, reason: 'Could not determine exact insertion point. Suggestion appended as comment.' });
+    }
+  }
+
+  return { updatedFiles, applied, failed };
+}
+
+function buildPrompt(projectFiles, userMessage, activeFile = null) {
+  const fileEntries = Object.entries(projectFiles);
+  
+  if (fileEntries.length === 0) {
+    return `User: ${userMessage}\n\n(No files open currently)`;
+  }
+
+  const tree = buildFileTree(fileEntries.map(([name]) => name));
+  
+  const filesContext = fileEntries.map(([filename, content]) => {
+    const lines = content.split('\n');
+    const truncated = content.length > 4000 
+      ? content.substring(0, 4000) + `\n... [truncated, ${content.length - 4000} more chars]`
+      : content;
+    return `=== FILE: ${filename} (${lines.length} lines) ===\n\`\`\`\n${truncated}\n\`\`\``;
+  }).join('\n\n');
+
+  const activeHint = activeFile 
+    ? `\n\nCURRENTLY EDITING: ${activeFile}\nThis is the file the user is most likely asking about.` 
+    : '';
+
+  return `PROJECT STRUCTURE:
+${tree}
+
+${filesContext}${activeHint}
+
+INSTRUCTION: ${userMessage}
+
+REMEMBER:
+- Reference files by their full path (e.g., "Lson/index.js")
+- When editing nested files, use format: \`\`\`edit:Lson/index.js
+- Only show changed code in \`\`\`edit:filepath\`\`\` blocks
+- Do NOT output full files unless explicitly asked
+- The user is currently looking at: ${activeFile || 'no specific file'}`;
+}
+
+function buildFileTree(filenames) {
+  const tree = {};
+  
+  for (const filepath of filenames) {
+    const parts = filepath.split('/');
+    let current = tree;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (i === parts.length - 1) {
+        current[part] = null;
+      } else {
+        current[part] = current[part] || {};
+        current = current[part];
+      }
+    }
+  }
+
+  function render(node, prefix = '') {
+    const entries = Object.entries(node);
+    let result = '';
+    for (let i = 0; i < entries.length; i++) {
+      const [name, child] = entries[i];
+      const isLast = i === entries.length - 1;
+      const connector = isLast ? '└── ' : '├── ';
+      const childPrefix = prefix + (isLast ? '    ' : '│   ');
+      
+      if (child === null) {
+        result += prefix + connector + name + '\n';
+      } else {
+        result += prefix + connector + name + '/\n';
+        result += render(child, childPrefix);
+      }
+    }
+    return result;
+  }
+
+  return render(tree).trim() || '(no files)';
 }
 
 function cleanResponse(text) {
@@ -131,9 +495,27 @@ function cleanResponse(text) {
     .replace(/```\s*text\s*/g, '');
 }
 
-export async function generateCodeResponse(projectFiles, userMessage, chatHistory = [], provider = 'gemini') {
+function getProviderChain(preferredProvider = 'openrouter') {
+  const allProviders = ['openrouter', 'groq', 'gemini'];
+  const ordered = [preferredProvider, ...allProviders.filter(p => p !== preferredProvider)];
+  
+  return ordered.map(p => {
+    switch (p) {
+      case 'openrouter':
+        return { name: 'openrouter', call: (msgs) => callOpenRouter(msgs) };
+      case 'groq':
+        return { name: 'groq', call: (msgs) => callGroq(msgs) };
+      case 'gemini':
+        return { name: 'gemini', call: null };
+      default:
+        return { name: 'openrouter', call: (msgs) => callOpenRouter(msgs) };
+    }
+  });
+}
+
+export async function generateCodeResponse(projectFiles, userMessage, chatHistory = [], provider = 'openrouter', activeFile = null) {
   try {
-    const prompt = buildPrompt(projectFiles, userMessage);
+    const prompt = buildPrompt(projectFiles, userMessage, activeFile);
     
     const messages = [
       { role: 'system', content: SYSTEM_INSTRUCTION },
@@ -149,27 +531,27 @@ export async function generateCodeResponse(projectFiles, userMessage, chatHistor
 
     messages.push({ role: 'user', content: prompt });
 
-    // Try preferred provider first, fallback to other
-    const providers = provider === 'gemini' 
-      ? [
-          () => callGemini(prompt, 'gemini-2.5-flash'),
-          () => callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct'),
-        ]
-      : [
-          () => callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct'),
-          () => callGemini(prompt, 'gemini-2.5-flash'),
-        ];
-
+    const chain = getProviderChain(provider);
     let lastError;
-    for (const callFn of providers) {
+
+    for (const { name, call } of chain) {
       try {
-        const response = await callFn();
-        if (!response) continue;
-        const cleaned = cleanResponse(response);
-        console.log(`✅ Success with provider, length: ${cleaned.length}`);
+        let result;
+        
+        if (name === 'gemini') {
+          result = await callGemini(prompt, 'gemini-2.5-flash');
+        } else {
+          result = await call(messages);
+        }
+
+        if (!result || !result.content) continue;
+        
+        const cleaned = cleanResponse(result.content);
+        console.log(`Success with provider: ${name}, model: ${result.model}, length: ${cleaned.length}`);
+        
         return cleaned;
       } catch (error) {
-        console.warn(`❌ Provider failed:`, error.message);
+        console.warn(`Provider ${name} failed:`, error.message);
         lastError = error;
         continue;
       }
@@ -183,15 +565,13 @@ export async function generateCodeResponse(projectFiles, userMessage, chatHistor
   }
 }
 
-export async function streamCodeResponse(projectFiles, userMessage, chatHistory = [], onChunk, provider = 'gemini') {
+export async function streamCodeResponse(projectFiles, userMessage, chatHistory = [], onChunk, provider = 'openrouter', activeFile = null) {
   try {
-    const prompt = buildPrompt(projectFiles, userMessage);
+    const prompt = buildPrompt(projectFiles, userMessage, activeFile);
 
-    // Gemini doesn't support streaming the same way, so use Groq for streaming
     if (provider === 'gemini') {
-      const response = await generateCodeResponse(projectFiles, userMessage, chatHistory, 'gemini');
+      const response = await generateCodeResponse(projectFiles, userMessage, chatHistory, 'gemini', activeFile);
       if (onChunk) {
-        // Simulate streaming by sending chunks
         const chunks = response.split(' ');
         for (const chunk of chunks) {
           onChunk(chunk + ' ');
@@ -201,7 +581,6 @@ export async function streamCodeResponse(projectFiles, userMessage, chatHistory 
       return response;
     }
 
-    // Groq streaming
     const messages = [
       { role: 'system', content: SYSTEM_INSTRUCTION },
       ...chatHistory.slice(-5).map(m => ({
@@ -211,54 +590,30 @@ export async function streamCodeResponse(projectFiles, userMessage, chatHistory 
       { role: 'user', content: prompt },
     ];
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-        messages,
-        temperature: 0.7,
-        max_tokens: 2048,
-        stream: true,
-      }),
-    });
+    const streamProviders = provider === 'openrouter' 
+      ? [
+          { name: 'openrouter', call: () => streamOpenRouter(messages, onChunk) },
+          { name: 'groq', call: () => streamGroq(messages, onChunk) },
+        ]
+      : [
+          { name: 'groq', call: () => streamGroq(messages, onChunk) },
+          { name: 'openrouter', call: () => streamOpenRouter(messages, onChunk) },
+        ];
 
-    if (!response.ok) {
-      throw new Error(`Groq streaming error: ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullText = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n').filter(line => line.trim().startsWith('data:'));
-
-      for (const line of lines) {
-        const data = line.replace('data:', '').trim();
-        if (data === '[DONE]') continue;
-
-        try {
-          const parsed = JSON.parse(data);
-          const content = parsed.choices?.[0]?.delta?.content;
-          if (content) {
-            fullText += content;
-            if (onChunk) onChunk(content);
-          }
-        } catch {
-          // Skip invalid JSON
-        }
+    let lastError;
+    for (const { name, call } of streamProviders) {
+      try {
+        const result = await call();
+        console.log(`Stream success with provider: ${name}, model: ${result.model}`);
+        return result.content;
+      } catch (error) {
+        console.warn(`Stream provider ${name} failed:`, error.message);
+        lastError = error;
+        continue;
       }
     }
 
-    return cleanResponse(fullText);
+    throw lastError || new Error('All streaming providers failed');
   } catch (error) {
     console.error('streamCodeResponse error:', error);
     const fallback = getFallbackResponse();
@@ -267,10 +622,87 @@ export async function streamCodeResponse(projectFiles, userMessage, chatHistory 
   }
 }
 
+async function streamGroq(messages, onChunk) {
+  if (!GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY not set');
+  }
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      messages,
+      temperature: 0.7,
+      max_tokens: 4096,
+      stream: true,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Groq streaming error: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n').filter(line => line.trim().startsWith('data:'));
+
+    for (const line of lines) {
+      const data = line.replace('data:', '').trim();
+      if (data === '[DONE]') continue;
+
+      try {
+        const parsed = JSON.parse(data);
+        const content = parsed.choices?.[0]?.delta?.content;
+        if (content) {
+          fullText += content;
+          if (onChunk) onChunk(content);
+        }
+      } catch {
+        // Skip invalid JSON
+      }
+    }
+  }
+
+  return {
+    content: cleanResponse(fullText),
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    provider: 'groq',
+  };
+}
+
 export async function testConnection() {
   const results = {};
 
-  // Test Groq
+  if (OPENROUTER_API_KEY) {
+    try {
+      const messages = [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: 'Say "OK" in one word.' },
+      ];
+      const response = await callOpenRouter(messages);
+      results.openrouter = { 
+        status: 'ok', 
+        response: response.content.trim(),
+        model: response.model,
+      };
+    } catch (error) {
+      results.openrouter = { status: 'error', error: error.message };
+    }
+  } else {
+    results.openrouter = { status: 'not_configured' };
+  }
+
   if (GROQ_API_KEY) {
     try {
       const messages = [
@@ -278,7 +710,7 @@ export async function testConnection() {
         { role: 'user', content: 'Say "OK" in one word.' },
       ];
       const response = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct');
-      results.groq = { status: 'ok', response: response.trim() };
+      results.groq = { status: 'ok', response: response.content.trim() };
     } catch (error) {
       results.groq = { status: 'error', error: error.message };
     }
@@ -286,11 +718,10 @@ export async function testConnection() {
     results.groq = { status: 'not_configured' };
   }
 
-  // Test Gemini
   if (geminiClient) {
     try {
       const response = await callGemini('Say "OK" in one word.', 'gemini-2.5-flash');
-      results.gemini = { status: 'ok', response: response.trim() };
+      results.gemini = { status: 'ok', response: response.content.trim() };
     } catch (error) {
       results.gemini = { status: 'error', error: error.message };
     }
@@ -299,4 +730,24 @@ export async function testConnection() {
   }
 
   return results;
+}
+
+export async function getAvailableModels() {
+  const freeModels = await fetchOpenRouterFreeModels();
+  
+  return {
+    openrouter: {
+      configured: !!OPENROUTER_API_KEY,
+      freeModels: freeModels,
+      defaultModels: DEFAULT_FREE_MODELS,
+    },
+    groq: {
+      configured: !!GROQ_API_KEY,
+      models: ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.3-70b-versatile'],
+    },
+    gemini: {
+      configured: !!GEMINI_API_KEY,
+      models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+    },
+  };
 }

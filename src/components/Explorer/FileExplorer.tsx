@@ -25,8 +25,6 @@ import {
 } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 
-// ─── Types ───────────────────────────────────────────────────────────
-
 interface TreeNode {
   name: string;
   displayName: string;
@@ -34,15 +32,15 @@ interface TreeNode {
   children: TreeNode[];
 }
 
-// ─── Build folder tree from flat paths ───────────────────────────────
-
-function buildFolderTree(filePaths: string[]): TreeNode[] {
+function buildFolderTree(filePaths: string[], folderPaths: string[]): TreeNode[] {
   const root: TreeNode[] = [];
   const folderMap = new Map<string, TreeNode>();
 
-  const sorted = [...filePaths].sort((a, b) => a.localeCompare(b));
+  const allPaths = [...new Set([...filePaths, ...folderPaths])];
+  const sorted = allPaths.sort((a, b) => a.localeCompare(b));
 
   for (const fullPath of sorted) {
+    const isFolderOnly = folderPaths.includes(fullPath) && !filePaths.includes(fullPath);
     const parts = fullPath.split('/');
     let currentLevel = root;
     let builtPath = '';
@@ -52,7 +50,7 @@ function buildFolderTree(filePaths: string[]): TreeNode[] {
       const isLast = i === parts.length - 1;
       builtPath = builtPath ? `${builtPath}/${part}` : part;
 
-      if (isLast) {
+      if (isLast && !isFolderOnly) {
         currentLevel.push({
           name: fullPath,
           displayName: part,
@@ -96,8 +94,6 @@ function getFileIcon(name: string) {
   if (name.match(/\.(jpg|jpeg|png|gif|svg|webp|ico|bmp|tiff)$/i)) return <Image className="w-3.5 h-3.5 text-[#d2a8ff] shrink-0" />;
   return <FileText className="w-3.5 h-3.5 text-[#8b949e] shrink-0" />;
 }
-
-// ─── TreeItem ────────────────────────────────────────────────────────
 
 function TreeItem({
   node,
@@ -164,7 +160,6 @@ function TreeItem({
           className="group flex items-center gap-1.5 w-full px-2 py-1 text-[11px] rounded-sm transition-colors cursor-pointer select-none text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]"
           style={{ paddingLeft }}
         >
-          {/* Checkbox for multi-select */}
           <button
             onClick={(e) => { e.stopPropagation(); onToggleSelect(node.name); }}
             className="shrink-0 text-[#8b949e] hover:text-[#c9d1d9]"
@@ -172,7 +167,6 @@ function TreeItem({
             {isSelected ? <CheckSquare className="w-3 h-3 text-[#58a6ff]" /> : <Square className="w-3 h-3" />}
           </button>
 
-          {/* Expand/collapse */}
           <button onClick={() => onToggle(node.name)} className="shrink-0">
             {isOpen
               ? <ChevronDown className="w-3 h-3" />
@@ -180,7 +174,6 @@ function TreeItem({
             }
           </button>
 
-          {/* Folder icon */}
           <button onClick={() => onToggle(node.name)} className="shrink-0">
             {isOpen
               ? <FolderOpen className="w-3.5 h-3.5 text-[#e3b341]" />
@@ -188,11 +181,9 @@ function TreeItem({
             }
           </button>
 
-          {/* Name */}
           <span onClick={() => onToggle(node.name)} className="truncate font-medium flex-1">{node.displayName}</span>
           <span className="text-[9px] text-[#484f58] shrink-0">{node.children.length} items</span>
 
-          {/* DELETE BUTTON - visible on hover */}
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(node); }}
             className="shrink-0 p-0.5 hover:bg-[#30363d] rounded opacity-0 group-hover:opacity-100 transition text-[#f85149]"
@@ -226,7 +217,6 @@ function TreeItem({
     );
   }
 
-  // FILE
   return (
     <div
       onContextMenu={(e) => onContextMenu(e, node)}
@@ -237,7 +227,6 @@ function TreeItem({
       }`}
       style={{ paddingLeft }}
     >
-      {/* Checkbox for multi-select */}
       <button
         onClick={(e) => { e.stopPropagation(); onToggleSelect(node.name); }}
         className="shrink-0"
@@ -245,15 +234,12 @@ function TreeItem({
         {isSelected ? <CheckSquare className="w-3 h-3 text-[#58a6ff]" /> : <Square className="w-3 h-3" />}
       </button>
 
-      {/* File icon */}
       <span onClick={() => onSelect(node.name)} className="shrink-0">
         {getFileIcon(node.name)}
       </span>
 
-      {/* Name */}
       <span onClick={() => onSelect(node.name)} className="truncate flex-1">{node.displayName}</span>
 
-      {/* DELETE BUTTON - visible on hover */}
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(node); }}
         className="shrink-0 p-0.5 hover:bg-[#30363d] rounded opacity-0 group-hover:opacity-100 transition text-[#f85149]"
@@ -265,10 +251,8 @@ function TreeItem({
   );
 }
 
-// ─── Main FileExplorer ───────────────────────────────────────────────
-
 export default function FileExplorer() {
-  const { files, activeFile, openFile, closeFile, updateFile } = useWorkspaceStore();
+  const { files, folders, activeFile, openFile, closeFile, updateFile, createFolder, deleteFolder } = useWorkspaceStore();
 
   const [newFileName, setNewFileName] = useState('');
   const [showNewFile, setShowNewFile] = useState(false);
@@ -285,16 +269,13 @@ export default function FileExplorer() {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set(['']));
 
-  // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: TreeNode | null }>({ x: 0, y: 0, node: null });
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const fileNames = Object.keys(files);
 
-  // Build tree
-  const folderTree = useMemo(() => buildFolderTree(fileNames), [fileNames]);
+  const folderTree = useMemo(() => buildFolderTree(fileNames, folders), [fileNames, folders]);
 
-  // Filter for search
   const filteredTree = useMemo(() => {
     if (!searchQuery.trim()) return folderTree;
     const q = searchQuery.toLowerCase();
@@ -315,7 +296,6 @@ export default function FileExplorer() {
     return filterNodes(folderTree);
   }, [folderTree, searchQuery]);
 
-  // Close context menu on outside click
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
@@ -351,7 +331,6 @@ export default function FileExplorer() {
 
   const isFolderOpen = useCallback((path: string) => openFolders.has(path), [openFolders]);
 
-  // Toggle selection (checkbox)
   const toggleSelect = useCallback((name: string) => {
     setSelectedFiles(prev => {
       const next = new Set(prev);
@@ -361,7 +340,6 @@ export default function FileExplorer() {
     });
   }, []);
 
-  // Select all visible
   const selectAll = useCallback(() => {
     const allNames: string[] = [];
     const collect = (nodes: TreeNode[]) => {
@@ -374,7 +352,6 @@ export default function FileExplorer() {
     setSelectedFiles(new Set(allNames));
   }, [filteredTree]);
 
-  // Clear selection
   const clearSelection = useCallback(() => setSelectedFiles(new Set()), []);
 
   const getAllFilesInNode = useCallback((node: TreeNode): string[] => {
@@ -383,24 +360,23 @@ export default function FileExplorer() {
   }, []);
 
   const handleDelete = useCallback((node: TreeNode) => {
-    const targets = node.type === 'folder' ? getAllFilesInNode(node) : [node.name];
-    const count = targets.length;
-    const itemType = node.type === 'folder'
-      ? `folder "${node.displayName}" and ${count} file${count > 1 ? 's' : ''}`
-      : `"${node.displayName}"`;
-
-    if (!window.confirm(`Delete ${itemType}?`)) return;
-
-    const newFiles = { ...files };
-    targets.forEach(f => {
-      delete newFiles[f];
-      closeFile(f);
-    });
-    useWorkspaceStore.setState({ files: newFiles });
-    showToast(`🗑️ Deleted ${node.type === 'folder' ? 'folder' : 'file'}`, 'info');
+    if (node.type === 'folder') {
+      const childFiles = getAllFilesInNode(node);
+      const count = childFiles.length;
+      if (!window.confirm(`Delete folder "${node.displayName}" and ${count} file${count > 1 ? 's' : ''}?`)) return;
+      deleteFolder(node.name);
+      showToast(`Deleted folder "${node.displayName}"`, 'info');
+    } else {
+      if (!window.confirm(`Delete "${node.displayName}"?`)) return;
+      const newFiles = { ...files };
+      delete newFiles[node.name];
+      useWorkspaceStore.setState({ files: newFiles });
+      closeFile(node.name);
+      showToast(`Deleted "${node.displayName}"`, 'info');
+    }
     clearSelection();
     setContextMenu(prev => ({ ...prev, node: null }));
-  }, [files, closeFile, showToast, clearSelection, getAllFilesInNode]);
+  }, [files, closeFile, showToast, clearSelection, getAllFilesInNode, deleteFolder]);
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedFiles.size === 0) return;
@@ -412,7 +388,7 @@ export default function FileExplorer() {
       closeFile(f);
     });
     useWorkspaceStore.setState({ files: newFiles });
-    showToast(`🗑️ Deleted ${selectedFiles.size} file${selectedFiles.size > 1 ? 's' : ''}`, 'info');
+    showToast(`Deleted ${selectedFiles.size} file${selectedFiles.size > 1 ? 's' : ''}`, 'info');
     clearSelection();
   }, [files, selectedFiles, closeFile, showToast, clearSelection]);
 
@@ -429,7 +405,7 @@ export default function FileExplorer() {
       return;
     }
     if (fileNames.some(f => f === renameValue.trim())) {
-      showToast(`⚠️ "${renameValue.trim()}" already exists`, 'error');
+      showToast(`"${renameValue.trim()}" already exists`, 'error');
       setRenamingFile(null);
       setRenameValue('');
       return;
@@ -442,12 +418,10 @@ export default function FileExplorer() {
     if (activeFile === renamingFile) {
       useWorkspaceStore.setState({ activeFile: renameValue.trim() });
     }
-    showToast(`✅ Renamed`, 'success');
+    showToast(`Renamed`, 'success');
     setRenamingFile(null);
     setRenameValue('');
   }, [renamingFile, renameValue, files, fileNames, activeFile, updateFile, showToast]);
-
-  // ─── Create File ───────────────────────────────────────────────────
 
   const startCreateFile = useCallback((targetFolder: string | null = null) => {
     setNewFileTargetFolder(targetFolder);
@@ -460,13 +434,12 @@ export default function FileExplorer() {
     if (!newFileName.trim()) return;
     
     let name = newFileName.trim();
-    // If target folder specified, prepend it
     if (newFileTargetFolder) {
       name = `${newFileTargetFolder}/${name}`;
     }
 
     if (name in files) {
-      showToast(`⚠️ "${name}" already exists`, 'error');
+      showToast(`"${name}" already exists`, 'error');
       return;
     }
 
@@ -475,9 +448,8 @@ export default function FileExplorer() {
     setNewFileName('');
     setShowNewFile(false);
     setNewFileTargetFolder(null);
-    showToast(`✅ "${name}" created`, 'success');
+    showToast(`"${name}" created`, 'success');
 
-    // Auto-expand parent folders
     const parts = name.split('/');
     let path = '';
     setOpenFolders(prev => {
@@ -490,8 +462,6 @@ export default function FileExplorer() {
     });
   }, [newFileName, newFileTargetFolder, files, updateFile, openFile, showToast]);
 
-  // ─── Create Folder ─────────────────────────────────────────────────
-
   const startCreateFolder = useCallback((targetFolder: string | null = null) => {
     setNewFolderTarget(targetFolder);
     setShowNewFolder(true);
@@ -503,32 +473,22 @@ export default function FileExplorer() {
     if (!newFolderName.trim()) return;
 
     let folderPath = newFolderName.trim();
-    // If target folder specified, prepend it
     if (newFolderTarget) {
       folderPath = `${newFolderTarget}/${folderPath}`;
     }
 
-    // Create a placeholder file inside the folder to make it exist
-    const placeholderFile = `${folderPath}/.gitkeep`;
-    
-    if (placeholderFile in files) {
-      showToast(`⚠️ Folder "${folderPath}" already exists`, 'error');
-      return;
-    }
-
-    updateFile(placeholderFile, '');
+    createFolder(folderPath);
     setNewFolderName('');
     setShowNewFolder(false);
     setNewFolderTarget(null);
-    showToast(`✅ Folder "${folderPath}" created`, 'success');
+    showToast(`Folder "${folderPath}" created`, 'success');
 
-    // Auto-expand the new folder
     setOpenFolders(prev => {
       const next = new Set(prev);
       next.add(folderPath);
       return next;
     });
-  }, [newFolderName, newFolderTarget, files, updateFile, showToast]);
+  }, [newFolderName, newFolderTarget, createFolder, showToast]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, node: TreeNode) => {
     e.preventDefault();
@@ -545,11 +505,8 @@ export default function FileExplorer() {
 
   const isFileSelected = useCallback((name: string) => selectedFiles.has(name), [selectedFiles]);
 
-  // ─── Render ────────────────────────────────────────────────────────
-
   return (
     <div className="h-full flex flex-col bg-[#0d1117] min-w-0">
-      {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-[#161b22] border-b border-[#21262d] shrink-0">
         <span className="text-[11px] font-semibold text-[#c9d1d9] tracking-wide">EXPLORER</span>
         <div className="flex items-center gap-0.5">
@@ -581,7 +538,6 @@ export default function FileExplorer() {
         </div>
       </div>
 
-      {/* Search */}
       {isSearchOpen && (
         <div className="px-3 py-2 border-b border-[#21262d] shrink-0">
           <div className="relative">
@@ -603,7 +559,6 @@ export default function FileExplorer() {
         </div>
       )}
 
-      {/* Multi-select toolbar */}
       {selectedFiles.size > 0 && (
         <div className="px-3 py-2 bg-[#1f6feb]/10 border-b border-[#30363d] shrink-0 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -621,14 +576,12 @@ export default function FileExplorer() {
         </div>
       )}
 
-      {/* Project name */}
       <div className="px-3 py-2 flex items-center gap-2 border-b border-[#21262d] shrink-0">
         <ChevronDown className="w-3 h-3 text-[#8b949e]" />
         <span className="text-[11px] font-bold text-[#c9d1d9]">AI CODE WORKSPACE</span>
         <span className="text-[9px] text-[#484f58] ml-auto">{fileNames.length} files</span>
       </div>
 
-      {/* New file input */}
       {showNewFile && (
         <div className="px-3 py-1.5 border-b border-[#21262d] shrink-0">
           <div className="text-[10px] text-[#8b949e] mb-1">
@@ -649,7 +602,6 @@ export default function FileExplorer() {
         </div>
       )}
 
-      {/* New folder input */}
       {showNewFolder && (
         <div className="px-3 py-1.5 border-b border-[#21262d] shrink-0">
           <div className="text-[10px] text-[#8b949e] mb-1">
@@ -670,7 +622,6 @@ export default function FileExplorer() {
         </div>
       )}
 
-      {/* ═══ SCROLLABLE FILE TREE ═══ */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 custom-scrollbar">
         {filteredTree.length === 0 ? (
           <div className="px-3 py-8 text-center">
@@ -719,7 +670,6 @@ export default function FileExplorer() {
         )}
       </div>
 
-      {/* Footer */}
       <div className="border-t border-[#21262d] bg-[#161b22] shrink-0">
         <div className="flex items-center border-b border-[#21262d]">
           <button onClick={toggleSettings} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition">
@@ -739,7 +689,6 @@ export default function FileExplorer() {
         </div>
       </div>
 
-      {/* Context Menu */}
       {contextMenu.node && (
         <div
           ref={contextMenuRef}

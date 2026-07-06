@@ -8,16 +8,57 @@ interface FetchOptions {
   headers?: Record<string, string>;
 }
 
-interface ChatMessage {
+export interface ChatMessage {
   role: string;
   content: string;
   timestamp: number;
 }
 
-interface ApiResponse {
+export interface AiModelsResponse {
+  success: boolean;
+  data: {
+    openrouter: {
+      configured: boolean;
+      freeModels: string[];
+      defaultModels: string[];
+    };
+    groq: {
+      configured: boolean;
+      models: string[];
+    };
+    gemini: {
+      configured: boolean;
+      models: string[];
+    };
+  };
+  timestamp?: string;
+}
+
+export interface EditSummary {
+  filename: string;
+  type: 'created' | 'replaced' | 'appended' | 'unchanged';
+}
+
+export interface ChatApiResponse {
+  success: boolean;
+  response: string;
+  provider: string;
+  timestamp: string;
+  edits?: {
+    applied: EditSummary[];
+    failed: Array<{ filename: string; reason: string }>;
+  };
+  updatedFiles?: Record<string, string>;
+}
+
+export interface ApiResponse {
   success?: boolean;
   response?: string;
   error?: string;
+  provider?: string;
+  model?: string;
+  timestamp?: string;
+  data?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -49,45 +90,63 @@ async function fetchWithError(url: string, options: FetchOptions = {}): Promise<
   }
 }
 
-// AI API - Single sendChatMessage function with provider support
+// ─── AI API ─────────────────────────────────────────────────────────
+
+export type AiProvider = 'gemini' | 'groq' | 'openrouter';
+
 export async function sendChatMessage(
   projectFiles: Record<string, string>,
   message: string,
   chatHistory: ChatMessage[] = [],
-  provider: 'gemini' | 'groq' = 'gemini'
-): Promise<ApiResponse> {
+  provider: AiProvider = 'openrouter',
+  preferredModel?: string | null,
+  activeFile?: string | null
+): Promise<ChatApiResponse> {
   const response = await fetchWithError(`${API_BASE_URL}/ai/chat`, {
     method: 'POST',
-    body: JSON.stringify({ projectFiles, message, chatHistory, provider }),
+    body: JSON.stringify({ 
+      projectFiles, 
+      message, 
+      chatHistory, 
+      provider,
+      preferredModel,
+      activeFile,
+    }),
   });
 
-  // Handle different response formats
-  if (response.response !== undefined) {
-    return response;
-  }
-  
-  if (response.success === false) {
-    throw new Error(response.error || 'AI request failed');
-  }
-
-  return response;
+  return response as unknown as ChatApiResponse;
 }
 
-export async function analyzeCode(projectFiles: Record<string, string>): Promise<ApiResponse> {
+export async function analyzeCode(
+  projectFiles: Record<string, string>, 
+  provider: AiProvider = 'openrouter',
+  activeFile?: string | null
+): Promise<ApiResponse> {
   return fetchWithError(`${API_BASE_URL}/ai/analyze`, {
     method: 'POST',
-    body: JSON.stringify({ projectFiles }),
+    body: JSON.stringify({ projectFiles, provider, activeFile }),
   });
 }
 
-export async function explainCode(projectFiles: Record<string, string>, filename: string): Promise<ApiResponse> {
+export async function explainCode(
+  projectFiles: Record<string, string>, 
+  filename: string, 
+  provider: AiProvider = 'openrouter',
+  activeFile?: string | null
+): Promise<ApiResponse> {
   return fetchWithError(`${API_BASE_URL}/ai/explain`, {
     method: 'POST',
-    body: JSON.stringify({ projectFiles, filename }),
+    body: JSON.stringify({ projectFiles, filename, provider, activeFile }),
   });
 }
 
-// Project API
+export async function getAiModels(): Promise<AiModelsResponse> {
+  const res = await fetchWithError(`${API_BASE_URL}/ai/models`);
+  return res as unknown as AiModelsResponse;
+}
+
+// ─── PROJECT API ────────────────────────────────────────────────────
+
 export async function listProjects(): Promise<ApiResponse> {
   return fetchWithError(`${API_BASE_URL}/projects`);
 }
@@ -127,19 +186,17 @@ export async function updateProjectFiles(id: string, files: Record<string, strin
   });
 }
 
-// Health check
+// ─── HEALTH & UPLOAD ────────────────────────────────────────────────
+
 export async function checkApiHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${API_BASE_URL}/health`, {
-      method: 'GET',
-    });
+    const response = await fetch(`${API_BASE_URL}/health`, { method: 'GET' });
     return response.ok;
   } catch {
     return false;
   }
 }
 
-// Upload API
 export async function uploadFile(file: File): Promise<ApiResponse> {
   const formData = new FormData();
   formData.append('file', file);
@@ -152,7 +209,6 @@ export async function uploadFile(file: File): Promise<ApiResponse> {
   if (!response.ok) {
     throw new Error('Upload failed');
   }
-
   return response.json();
 }
 
@@ -168,6 +224,5 @@ export async function uploadZip(file: File): Promise<ApiResponse> {
   if (!response.ok) {
     throw new Error('ZIP upload failed');
   }
-
   return response.json();
 }

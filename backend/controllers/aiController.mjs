@@ -1,13 +1,15 @@
 // backend/controllers/aiController.mjs
-import { generateCodeResponse, streamCodeResponse } from '../services/aiService.mjs';
+import { generateCodeResponse, streamCodeResponse, parseAiResponse, applyEdits } from '../services/aiService.mjs';
 
 export async function handleChat(req, res) {
   try {
-    const { projectFiles, message, chatHistory, provider } = req.body;
+    const { projectFiles, message, chatHistory, provider, preferredModel, activeFile } = req.body;
 
     console.log('=== handleChat DEBUG ===');
     console.log('Received message:', message);
-    console.log('Provider:', provider || 'gemini (default)');
+    console.log('Provider:', provider || 'openrouter (default)');
+    console.log('Preferred model:', preferredModel || 'auto-rotate');
+    console.log('Active file:', activeFile || 'none');
     console.log('Project files count:', Object.keys(projectFiles || {}).length);
     console.log('Chat history length:', (chatHistory || []).length);
     console.log('========================');
@@ -16,20 +18,42 @@ export async function handleChat(req, res) {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    console.log('Calling generateCodeResponse...');
-    const response = await generateCodeResponse(
+    const aiResponse = await generateCodeResponse(
       projectFiles || {},
       message,
       chatHistory || [],
-      provider || 'gemini'  // default to gemini
+      provider || 'openrouter',
+      activeFile || null
     );
-    console.log('AI response received, length:', response?.length);
+
+    // Parse response for targeted edits
+    const { message: cleanMessage, edits } = parseAiResponse(aiResponse);
+    
+    // Apply edits if found
+    let updatedFiles = null;
+    let editSummary = null;
+    
+    if (edits.length > 0) {
+      const result = applyEdits(projectFiles || {}, edits);
+      updatedFiles = result.updatedFiles;
+      editSummary = {
+        applied: result.applied,
+        failed: result.failed,
+      };
+      console.log('✅ Applied edits:', result.applied);
+      if (result.failed.length > 0) {
+        console.warn('⚠️ Failed edits:', result.failed);
+      }
+    }
 
     res.json({
       success: true,
-      response,
-      provider: provider || 'gemini',
+      response: cleanMessage || aiResponse,
+      provider: provider || 'openrouter',
       timestamp: new Date().toISOString(),
+      // Include edit info so frontend can apply changes
+      edits: editSummary,
+      updatedFiles: updatedFiles,
     });
   } catch (error) {
     console.error('=== Chat Error FULL ===');
@@ -43,7 +67,7 @@ export async function handleChat(req, res) {
 
 export async function handleStream(req, res) {
   try {
-    const { projectFiles, message, chatHistory, provider } = req.body;
+    const { projectFiles, message, chatHistory, provider, activeFile } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
@@ -59,7 +83,8 @@ export async function handleStream(req, res) {
       (chunk) => {
         res.write(chunk);
       },
-      provider || 'gemini'  // default to gemini
+      provider || 'openrouter',
+      activeFile || null
     );
 
     res.end();
@@ -71,19 +96,20 @@ export async function handleStream(req, res) {
 
 export async function handleAnalyze(req, res) {
   try {
-    const { projectFiles, provider } = req.body;
+    const { projectFiles, provider, activeFile } = req.body;
 
     const response = await generateCodeResponse(
       projectFiles || {},
       'Analyze this code for errors, bugs, and potential improvements. Provide specific fixes.',
       [],
-      provider || 'gemini'
+      provider || 'openrouter',
+      activeFile || null
     );
 
     res.json({
       success: true,
       response,
-      provider: provider || 'gemini',
+      provider: provider || 'openrouter',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -94,19 +120,20 @@ export async function handleAnalyze(req, res) {
 
 export async function handleExplain(req, res) {
   try {
-    const { projectFiles, filename, provider } = req.body;
+    const { projectFiles, filename, provider, activeFile } = req.body;
 
     const response = await generateCodeResponse(
       projectFiles || {},
       `Explain the code in ${filename || 'all files'} in detail. Break down the logic and structure.`,
       [],
-      provider || 'gemini'
+      provider || 'openrouter',
+      activeFile || null
     );
 
     res.json({
       success: true,
       response,
-      provider: provider || 'gemini',
+      provider: provider || 'openrouter',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

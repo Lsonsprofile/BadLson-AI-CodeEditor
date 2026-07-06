@@ -12,6 +12,12 @@ interface MessageProps {
   timestamp: number;
 }
 
+interface CodeBlock {
+  language: string;
+  code: string;
+  filename: string | null;
+}
+
 function getFileIcon(language: string) {
   switch (language) {
     case 'html': return <FileType className="w-3 h-3 text-orange-400" />;
@@ -34,9 +40,40 @@ function getLanguageColor(language: string): string {
   }
 }
 
+function extractEditBlocks(content: string): CodeBlock[] {
+  const blocks: CodeBlock[] = [];
+  const editRegex = /```edit:([^\n]+)\n([\s\S]*?)```/g;
+  let match;
+  while ((match = editRegex.exec(content)) !== null) {
+    const filename = match[1].trim();
+    const code = match[2].trim();
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    const language = ext === 'html' ? 'html' : ext === 'css' ? 'css' : ext === 'js' ? 'javascript' : ext === 'ts' ? 'typescript' : 'text';
+    blocks.push({ language, code, filename });
+  }
+  return blocks;
+}
+
+function extractRegularCodeBlocks(content: string): CodeBlock[] {
+  const blocks: CodeBlock[] = [];
+  const codeRegex = /```(\w+)?\n([\s\S]*?)```/g;
+  let match;
+  while ((match = codeRegex.exec(content)) !== null) {
+    const language = match[1] || 'text';
+    const code = match[2].trim();
+    let filename = null;
+    if (language === 'html') filename = 'index.html';
+    else if (language === 'css') filename = 'style.css';
+    else if (language === 'javascript' || language === 'js') filename = 'script.js';
+    blocks.push({ language, code, filename });
+  }
+  return blocks;
+}
+
 export default function Message({ role, content, timestamp }: MessageProps) {
   const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
   const isUser = role === 'user';
+  const { updateFile } = useWorkspaceStore();
 
   const handleCopy = useCallback((code: string, blockId: string) => {
     navigator.clipboard.writeText(code);
@@ -44,18 +81,21 @@ export default function Message({ role, content, timestamp }: MessageProps) {
     setTimeout(() => setCopiedBlock(null), 2000);
   }, []);
 
-  const handleApply = useCallback((code: string, language: string) => {
-    const { updateFile } = useWorkspaceStore.getState();
-    let targetFile = 'index.html';
-    if (language === 'css') targetFile = 'style.css';
-    if (language === 'javascript' || language === 'js') targetFile = 'script.js';
+  const handleApply = useCallback((code: string, filename: string | null) => {
+    if (!filename) {
+      showToast('Cannot apply: no target file detected. Use edit:path format.');
+      return;
+    }
 
-    updateFile(targetFile, code);
+    updateFile(filename, code);
+    showToast(`Applied changes to ${filename}`);
+  }, [updateFile]);
 
+  const showToast = (message: string) => {
     const toast = document.getElementById('toast');
     const toastMsg = document.getElementById('toastMsg');
     if (toast && toastMsg) {
-      toastMsg.textContent = `Applied changes to ${targetFile}`;
+      toastMsg.textContent = message;
       toast.classList.remove('opacity-0', 'pointer-events-none');
       toast.classList.add('opacity-100');
       setTimeout(() => {
@@ -63,20 +103,29 @@ export default function Message({ role, content, timestamp }: MessageProps) {
         toast.classList.add('opacity-0', 'pointer-events-none');
       }, 3000);
     }
-  }, []);
+  };
 
   const timeStr = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+  // Extract all code blocks with their target filenames
+  const editBlocks = extractEditBlocks(content);
+  const regularBlocks = extractRegularCodeBlocks(content);
+  const allBlocks = [...editBlocks, ...regularBlocks];
+
+  // Build a map of code content -> filename for quick lookup in ReactMarkdown
+  const codeToFilename = new Map<string, string | null>();
+  allBlocks.forEach(block => {
+    codeToFilename.set(block.code, block.filename);
+  });
+
   return (
     <div className={`flex gap-2 ${isUser ? 'flex-row-reverse' : ''} animate-message`}>
-      {/* Avatar */}
       <div className={`w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5 ${
         isUser ? 'bg-[#1f6feb]' : 'bg-violet-600'
       }`}>
         {isUser ? <User className="w-2.5 h-2.5 text-white" /> : <Bot className="w-2.5 h-2.5 text-white" />}
       </div>
 
-      {/* Message Content - FIXED WIDTH */}
       <div className={`${isUser ? 'text-right' : ''} min-w-0 max-w-[260px]`}>
         <div className={`inline-block rounded-lg px-2.5 py-1.5 w-full ${
           isUser 
@@ -94,15 +143,20 @@ export default function Message({ role, content, timestamp }: MessageProps) {
                     const language = match ? match[1] : 'text';
                     const codeString = String(children).replace(/\n$/, '');
                     const blockId = `code-${Math.random().toString(36).substr(2, 9)}`;
+                    
+                    // Check if this code block has an associated filename
+                    const targetFilename = codeToFilename.get(codeString) || null;
 
                     if (!inline && language !== 'text') {
                       return (
                         <div className={`rounded border overflow-hidden my-1.5 ${getLanguageColor(language)}`}>
-                          {/* Code Block Header */}
                           <div className="flex items-center justify-between px-2 py-1 bg-black/20 border-b border-inherit">
                             <div className="flex items-center gap-1">
                               {getFileIcon(language)}
                               <span className="text-[9px] font-medium text-[#8b949e] uppercase">{language}</span>
+                              {targetFilename && (
+                                <span className="text-[9px] text-emerald-400 ml-1">→ {targetFilename}</span>
+                              )}
                             </div>
                             <div className="flex items-center gap-1">
                               <button
@@ -116,14 +170,18 @@ export default function Message({ role, content, timestamp }: MessageProps) {
                                 )}
                               </button>
                               <button
-                                onClick={() => handleApply(codeString, language)}
-                                className="flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-violet-600/20 hover:bg-violet-600/30 text-violet-400 transition-colors"
+                                onClick={() => handleApply(codeString, targetFilename)}
+                                className={`flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] transition-colors ${
+                                  targetFilename 
+                                    ? 'bg-violet-600/20 hover:bg-violet-600/30 text-violet-400' 
+                                    : 'bg-[#30363d] text-[#484f58] cursor-not-allowed'
+                                }`}
+                                disabled={!targetFilename}
                               >
                                 <Wand2 className="w-2 h-2" /> Apply
                               </button>
                             </div>
                           </div>
-                          {/* Code Content */}
                           <SyntaxHighlighter
                             language={language}
                             style={vscDarkPlus}
@@ -148,7 +206,6 @@ export default function Message({ role, content, timestamp }: MessageProps) {
                       );
                     }
 
-                    // Inline code or plain text blocks
                     return (
                       <code className="px-1 py-px rounded bg-[#0d1117] border border-[#30363d] text-[#ff7b72] text-[11px] font-mono" {...props}>
                         {children}
@@ -172,7 +229,6 @@ export default function Message({ role, content, timestamp }: MessageProps) {
                       {children}
                     </a>
                   ),
-                  // BLOCK tables completely
                   table: () => null,
                   thead: () => null,
                   tbody: () => null,

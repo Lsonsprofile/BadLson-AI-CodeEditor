@@ -94,14 +94,12 @@ export default function LivePreview() {
       return assetUrl ? `url(${quote || ''}${assetUrl}${quote || ''})` : match;
     });
 
-  // FIX 1: No escapeHtml on CSS inside <style> tags
   const inlineLocalStylesheets = (html: string, baseFolder: string) =>
     html.replace(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi, (match, href) => {
       const css = getFileContent(href, baseFolder);
       if (!css) return match;
       const cssFolder = getFolderPath(resolveRelativePath(href, baseFolder) || normalizeFilePath(href));
-      // No escapeHtml here - CSS should not be HTML-escaped
-      return `<style>/* Injected CSS from ${href} */\n${rewriteCssAssetUrls(css, cssFolder)}</style>`;
+      return `<style>${rewriteCssAssetUrls(css, cssFolder)}</style>`;
     });
 
   const inlineLocalScripts = (html: string, baseFolder: string) =>
@@ -155,16 +153,35 @@ export default function LivePreview() {
 
   const generatePreview = useCallback(() => {
     const htmlPath = findPreviewHtmlPath();
-    const html = htmlPath ? files[htmlPath] : '<!DOCTYPE html><html><head><title>Preview</title></head><body><h1>Hello World</h1><p>Your content will appear here.</p></body></html>';
+    const html = htmlPath && files[htmlPath] ? files[htmlPath] : '';
     const baseFolder = htmlPath ? getFolderPath(htmlPath) : '';
     const css = getFileContent('style.css', baseFolder);
     let js = getFileContent('script.js', baseFolder);
 
     js = stripTypeScript(js);
 
+    if (!html) {
+      return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Preview</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #ffffff;
+    }
+  </style>
+</head>
+<body></body>
+</html>`;
+    }
+
     let previewHTML = html;
 
-    // Ensure proper viewport meta tag
     if (!previewHTML.includes('<meta name="viewport"')) {
       previewHTML = previewHTML.replace(
         '<head>',
@@ -172,11 +189,9 @@ export default function LivePreview() {
       );
     }
 
-    // FIX: Inline local stylesheet links - NO escapeHtml on CSS!
     previewHTML = inlineLocalStylesheets(previewHTML, baseFolder);
     if (css) {
-      // FIX: No escapeHtml here - CSS should not be HTML-escaped
-      const styleTag = `<style>/* Injected CSS */\n${rewriteCssAssetUrls(css, baseFolder)}</style>`;
+      const styleTag = `<style>${rewriteCssAssetUrls(css, baseFolder)}</style>`;
       if (previewHTML.includes('</head>')) {
         previewHTML = previewHTML.replace('</head>', styleTag + '</head>');
       } else {
@@ -184,17 +199,12 @@ export default function LivePreview() {
       }
     }
 
-    // Inline local script imports
     previewHTML = inlineLocalScripts(previewHTML, baseFolder);
-
-    // Rewrite local asset URLs in HTML
     previewHTML = rewriteHtmlSources(previewHTML, baseFolder);
 
-    // Inject JS with error handling wrapper
     if (js) {
       const wrappedJS = `
 <script>
-/* Injected JavaScript */
 (function() {
   'use strict';
   try {
@@ -213,13 +223,11 @@ export default function LivePreview() {
       previewHTML = previewHTML.replace('</body>', wrappedJS + '</body>');
     }
 
-    // Add fonts if not present
     if (!previewHTML.includes('fonts.googleapis.com')) {
       const fontLink = '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">';
       previewHTML = previewHTML.replace('</head>', fontLink + '</head>');
     }
 
-    // Ensure html and body tags exist
     if (!previewHTML.includes('<html')) {
       previewHTML = `<!DOCTYPE html><html>${previewHTML}</html>`;
     }
@@ -231,20 +239,17 @@ export default function LivePreview() {
     return previewHTML;
   }, [files, activeFile]);
 
-  // Generate and set iframe content when files or active file change
   useEffect(() => {
     const html = generatePreview();
     setIframeContent(html);
   }, [generatePreview]);
 
-  // Apply content to iframe
   useEffect(() => {
     if (iframeRef.current && iframeContent) {
       iframeRef.current.srcdoc = iframeContent;
     }
   }, [iframeContent]);
 
-  // Handle refresh events
   useEffect(() => {
     const handleRun = () => {
       setIsRefreshing(true);
@@ -257,7 +262,6 @@ export default function LivePreview() {
     return () => window.removeEventListener('run-preview', handleRun);
   }, [generatePreview]);
 
-  // Calculate scale to fit device in container
   useEffect(() => {
     const calculateScale = () => {
       if (!containerRef.current || previewDevice === 'desktop') {
@@ -267,47 +271,26 @@ export default function LivePreview() {
 
       const container = containerRef.current;
       const containerRect = container.getBoundingClientRect();
-      
-      // Get the actual available space with padding
       const containerWidth = containerRect.width - 48;
       const containerHeight = containerRect.height - 48;
-
-      // Device dimensions with bezel
       const deviceWidth = previewDevice === 'mobile' ? 375 : 768;
       const deviceHeight = previewDevice === 'mobile' ? 812 : 1024;
-      
-      // Add bezel padding
       const bezelPadding = 60;
       const totalWidth = deviceWidth + bezelPadding;
       const totalHeight = deviceHeight + bezelPadding;
-
-      // Calculate scales
-      const scaleX = containerWidth / totalWidth;
-      const scaleY = containerHeight / totalHeight;
-      
-      // Use the smaller scale to fit both dimensions
-      let fitScale = Math.min(scaleX, scaleY);
-      
-      // Don't scale up beyond 1:1
+      let fitScale = Math.min(containerWidth / totalWidth, containerHeight / totalHeight);
       fitScale = Math.min(fitScale, 1);
-      
-      // Ensure minimum visibility
       fitScale = Math.max(fitScale, 0.1);
-
       setScale(fitScale);
     };
 
-    // Initial calculation with delay for DOM readiness
     const timeoutId = setTimeout(calculateScale, 50);
-    
-    // Use ResizeObserver for container size changes
     const resizeObserver = new ResizeObserver(() => calculateScale());
     if (containerRef.current) {
       resizeObserver.observe(containerRef.current);
     }
-    
     window.addEventListener('resize', calculateScale);
-    
+
     return () => {
       clearTimeout(timeoutId);
       window.removeEventListener('resize', calculateScale);
@@ -315,7 +298,6 @@ export default function LivePreview() {
     };
   }, [previewDevice]);
 
-  // Device configuration
   const getDeviceConfig = () => {
     switch (previewDevice) {
       case 'mobile':
@@ -377,7 +359,6 @@ export default function LivePreview() {
 
   return (
     <div className="flex flex-col h-full w-full bg-[#0d1117]">
-      {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-[#161b22] border-b border-[#21262d] shrink-0">
         <div className="flex items-center gap-2">
           <Globe className="w-3.5 h-3.5 text-slate-400" />
@@ -424,7 +405,6 @@ export default function LivePreview() {
         </div>
       </div>
 
-      {/* Preview Area - This container does NOT scroll */}
       <div 
         ref={containerRef}
         className="flex-1 flex items-center justify-center p-2"
@@ -433,11 +413,10 @@ export default function LivePreview() {
             ? 'radial-gradient(ellipse at center, #1e293b 0%, #0d1117 70%)' 
             : '#ffffff',
           minHeight: '100px',
-          overflow: 'hidden', // Prevent scrolling here
+          overflow: 'hidden',
         }}
       >
         {isSimulated ? (
-          // Scaled device frame
           <div 
             className="relative flex-shrink-0"
             style={{
@@ -447,14 +426,10 @@ export default function LivePreview() {
               transformOrigin: 'center center',
             }}
           >
-            {/* Device bezel */}
             <div className={`absolute inset-0 ${device.borderRadius} ${device.bgColor} ${device.frameColor} border-[8px] shadow-2xl overflow-hidden`}>
-              {/* Notch (mobile only) */}
               {device.notch && (
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-36 h-7 bg-black rounded-b-2xl z-20" />
               )}
-              
-              {/* Screen - THIS is where scrolling happens */}
               <div 
                 className={`absolute inset-[6px] bg-white overflow-auto`} 
                 style={{ 
@@ -474,15 +449,12 @@ export default function LivePreview() {
                   srcDoc={iframeContent}
                 />
               </div>
-              
-              {/* Home indicator for mobile */}
               {device.notch && (
                 <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-36 h-1 bg-slate-600 rounded-full z-20" />
               )}
             </div>
           </div>
         ) : (
-          // Desktop mode - full screen with scrolling inside
           <div className="w-full h-full bg-white overflow-auto">
             <iframe
               ref={iframeRef}
@@ -503,34 +475,14 @@ export default function LivePreview() {
   );
 }
 
-// FIX 2: Safer stripTypeScript
 function stripTypeScript(code: string): string {
   if (!code) return code;
-  
-  // Remove TypeScript-specific syntax that breaks JS execution
   return code
-    // Remove type annotations on variable declarations: let x: string = ...
     .replace(/\b(let|const|var)\s+(\w+)\s*:\s*[^=;]+(?==)/g, '$1 $2')
-    // Remove type annotations in function parameters
     .replace(/(\w+)\s*:\s*[\w<>\[\]|&]+\s*(?=[,)])/g, '$1')
-    // Remove return type annotations
     .replace(/\)\s*:\s*[\w<>\[\]|&]+\s*(?=\{|;|=>)/g, ')')
-    // Remove interface declarations
     .replace(/interface\s+\w+\s*\{[^}]*\}/gs, '')
-    // Remove type aliases
     .replace(/type\s+\w+\s*=\s*[^;]+;/gs, '')
-    // Remove generic type parameters
     .replace(/<\s*[\w<>\[\]|&,\s]+\s*>/g, '')
-    // Remove 'as' type assertions
     .replace(/\s+as\s+[\w<>\[\]|&]+/g, '');
-}
-
-// FIX 3: escapeHtml - only for text content, not CSS
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
