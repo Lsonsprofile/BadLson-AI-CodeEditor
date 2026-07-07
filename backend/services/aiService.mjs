@@ -14,66 +14,13 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
 const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
-if (!GROQ_API_KEY) {
-  console.error('GROQ_API_KEY not found');
-} else {
-  console.log('GROQ_API_KEY loaded, length:', GROQ_API_KEY.length);
-}
-
-if (!GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY not found');
-} else {
-  console.log('GEMINI_API_KEY loaded, length:', GEMINI_API_KEY.length);
-}
-
-if (!OPENROUTER_API_KEY) {
-  console.error('OPENROUTER_API_KEY not found');
-} else {
-  console.log('OPENROUTER_API_KEY loaded, length:', OPENROUTER_API_KEY.length);
-}
-
-const SYSTEM_INSTRUCTION = `You are a Senior Full-Stack Developer and coding assistant in BadLson_AI_code Editor.
-
-Your job is to help the user write, debug, and improve code. You understand complex questions and can work with multiple files, nested folders, and large projects.
-
-HOW TO EDIT FILES:
-When the user asks you to change, fix, update, or add code to ANY file, you MUST use this EXACT format:
-
-\`\`\`edit:FULL_FILE_PATH
-// the complete new code for this file
-\`\`\`
-
-Examples:
-- \`\`\`edit:index.html
-- \`\`\`edit:Lson/index.js
-- \`\`\`edit:components/Header.tsx
-- \`\`\`edit:src/styles/main.css
-
-RULES:
-- ALWAYS use \`\`\`edit:path for code changes. Never use plain \`\`\`javascript or \`\`\`css for edits.
-- If the user asks about code, explain clearly and thoroughly.
-- If the user asks for a feature, provide complete working code.
-- Reference files by their FULL PATH from the project root.
-- Only output the changed/new code inside edit blocks, not full files unless asked.
-- You can suggest changes to multiple files in one response.
-- Be precise. Do not guess. If you need more info, ask.
-
-TECH STACK:
-- JavaScript: ES6+
-- CSS: standard CSS, Tailwind
-- HTML: HTML5
-- React when relevant`;
-
-function getFallbackResponse() {
-  const responses = [
-    "I'd help with that, but the AI service is currently experiencing high demand. Please try again in a few moments.",
-    "The AI is temporarily busy. Please try again shortly.",
-    "I'm currently unavailable due to high traffic. Try again in a minute or two.",
-    "AI service is experiencing a spike in demand. Please wait a moment and try your request again.",
-    "Sorry, I'm getting a lot of requests right now. Please try again in a few moments."
-  ];
-  return responses[Math.floor(Math.random() * responses.length)];
-}
+// ─── CONFIG ─────────────────────────────────────────────────────────
+const TOKEN_BUDGET = {
+  MAX_TOTAL_CHARS: 120000,
+  MAX_FILE_CHARS: 10000,
+  MAX_FILES: 40,
+  TREE_MAX_FILES: 150,
+};
 
 const DEFAULT_FREE_MODELS = [
   'google/gemma-4-26b-it:free',
@@ -89,37 +36,129 @@ let cachedFreeModels = null;
 let lastModelFetch = 0;
 const MODEL_CACHE_TTL_MS = 1000 * 60 * 30;
 
-// ─── TOKEN BUDGET CONFIG ────────────────────────────────────────────
-const TOKEN_BUDGET = {
-  MAX_TOTAL_CHARS: 100000,      // ~25k tokens (rough estimate: 4 chars = 1 token)
-  MAX_FILE_CHARS: 8000,         // Cap individual files at ~2k tokens
-  MAX_FILES: 50,                // Max number of files to include
-  TREE_MAX_FILES: 200,          // Max files to show in tree structure
+// ─── SYSTEM PROMPTS BY MODE ────────────────────────────────────────
+
+const BASE_SYSTEM = `You are a Senior Full-Stack Developer working inside BadLson AI Code Editor.
+
+TECH STACK: JavaScript ES6+, TypeScript, React, HTML5, CSS/Tailwind, Node.js, Express.
+
+ABSOLUTE RULES — VIOLATING THESE CORRUPTS USER FILES:
+1. ONLY use \`\`\`edit:FULL_FILE_PATH blocks for code changes
+2. NEVER output raw suggestions as /* AI SUGGESTION... */ comments
+3. NEVER output "Copy" or "Apply" buttons or labels
+4. NEVER append text to files outside of edit blocks
+5. If you cannot determine the exact change, ASK the user instead of guessing
+6. Work on ONE file at a time per response
+7. After completing a file, say: **File Completed:** filename
+8. If you need more info (error logs, file content), ASK for it
+9. Explain your reasoning BEFORE showing code changes`;
+
+const MODE_PROMPTS = {
+  code: `${BASE_SYSTEM}
+
+MODE: CODE GENERATION
+You are writing new code or modifying existing code.
+- Provide complete, working, production-ready code inside edit blocks ONLY
+- Follow best practices: error handling, type safety, performance
+- If the request is vague, ask clarifying questions first`,
+
+  debug: `${BASE_SYSTEM}
+
+MODE: DEBUGGING
+You are helping fix a bug or error.
+1. First, explain what you think is causing the issue
+2. Then provide the fix using \`\`\`edit:path format ONLY
+3. Explain why the fix works
+4. Suggest how to prevent similar issues
+
+If you need:
+- Error messages → ask for them
+- Console logs → ask for them
+- Specific file content → ask for it`,
+
+  review: `${BASE_SYSTEM}
+
+MODE: CODE REVIEW
+You are reviewing code for quality.
+Analyze and report on:
+1. Bugs and logic errors
+2. Security vulnerabilities (XSS, injection, auth issues)
+3. Performance problems (unnecessary re-renders, O(n²) loops)
+4. Maintainability (naming, structure, comments)
+5. TypeScript type safety issues
+
+For each issue:
+- Explain the problem
+- Show the corrected code with \`\`\`edit:path ONLY
+- Explain why it's better`,
+
+  explain: `${BASE_SYSTEM}
+
+MODE: EXPLANATION
+You are explaining code or concepts.
+- Break complex topics into simple steps
+- Use the actual code from the project as examples
+- Explain common mistakes related to this topic
+- Suggest best practices
+- NO edit blocks needed unless the user asks for code changes`,
+
+  design: `${BASE_SYSTEM}
+
+MODE: ARCHITECTURE/DESIGN
+You are helping design software structure.
+- Consider scalability, maintainability, security
+- Explain tradeoffs between approaches
+- Suggest folder structure and file organization
+- Do NOT write full implementation unless asked`,
+
+  error: `${BASE_SYSTEM}
+
+MODE: ERROR RESPONSE
+The user's code has errors. Help them fix it.
+
+ERROR INFORMATION is provided below. Use it to diagnose.
+
+Steps:
+1. Identify the root cause from the error
+2. Explain what's wrong
+3. Provide the fix with \`\`\`edit:path ONLY
+4. Verify the fix handles edge cases`,
+
+  generic: BASE_SYSTEM,
 };
 
-// ─── SMART FILE SELECTION ───────────────────────────────────────────
+// ─── MODE DETECTION ────────────────────────────────────────────────
 
-/**
- * Selects the most relevant files from a large project for AI context.
- * With 45k files, we can't send everything — we need to be smart.
- */
-export function selectRelevantFiles(projectFiles, userMessage, activeFile = null) {
+function detectMode(userMessage, context = {}) {
+  const msg = userMessage.toLowerCase();
+  
+  if (context.consoleErrors?.length || context.buildErrors?.length) return 'error';
+  if (msg.includes('review') || msg.includes('check this code') || msg.includes('what do you think')) return 'review';
+  if (msg.includes('explain') || msg.includes('how does') || msg.includes('what is') || msg.includes('why does')) return 'explain';
+  if (msg.includes('design') || msg.includes('architecture') || msg.includes('structure') || msg.includes('folder')) return 'design';
+  if (msg.includes('fix') || msg.includes('bug') || msg.includes('error') || msg.includes('broken') || msg.includes('not working')) return 'debug';
+  if (msg.includes('add') || msg.includes('create') || msg.includes('write') || msg.includes('implement') || msg.includes('change') || msg.includes('update') || msg.includes('refactor')) return 'code';
+  
+  return 'generic';
+}
+
+// ─── SMART FILE SELECTION ─────────────────────────────────────────
+
+export function selectRelevantFiles(projectFiles, userMessage, activeFile = null, recentFiles = []) {
   const entries = Object.entries(projectFiles);
   const totalFiles = entries.length;
   
   if (totalFiles === 0) return {};
-
-  // If small project (< MAX_FILES), send everything
   if (totalFiles <= TOKEN_BUDGET.MAX_FILES) {
-    return Object.fromEntries(
-      entries.map(([name, content]) => [name, truncateContent(content)])
-    );
+    return Object.fromEntries(entries.map(([name, content]) => [name, truncateContent(content)]));
   }
 
   const msgLower = userMessage.toLowerCase();
   const msgWords = new Set(msgLower.split(/\W+/).filter(w => w.length > 2));
   
-  // Score each file by relevance
+  // Build import map for relationship scoring
+  const importMap = buildImportMap(entries);
+  
   const scoredFiles = entries.map(([filename, content]) => {
     let score = 0;
     const fileLower = filename.toLowerCase();
@@ -127,14 +166,23 @@ export function selectRelevantFiles(projectFiles, userMessage, activeFile = null
     const contentWords = contentLower.split(/\W+/).filter(w => w.length > 2);
     const contentWordSet = new Set(contentWords);
     
-    // Active file gets massive boost
+    // Active file: massive boost
     if (activeFile && (filename === activeFile || fileLower.includes(activeFile.toLowerCase()))) {
-      score += 1000;
+      score += 2000;
     }
+    
+    // Recently edited files: high boost
+    if (recentFiles.includes(filename)) score += 500;
+    
+    // Files imported by active file: high boost
+    if (activeFile && importMap[activeFile]?.includes(filename)) score += 400;
+    
+    // Files that import active file: medium boost
+    if (activeFile && importMap[filename]?.includes(activeFile)) score += 300;
     
     // Filename matches query words
     for (const word of msgWords) {
-      if (fileLower.includes(word)) score += 50;
+      if (fileLower.includes(word)) score += 60;
     }
     
     // Content matches query words
@@ -142,90 +190,99 @@ export function selectRelevantFiles(projectFiles, userMessage, activeFile = null
     for (const word of msgWords) {
       if (contentWordSet.has(word)) contentMatches++;
     }
-    score += contentMatches * 10;
+    score += contentMatches * 15;
     
-    // Prefer smaller files (more likely to be focused modules)
-    const sizeBonus = Math.max(0, 5000 - content.length) / 100;
+    // Prefer focused modules (smaller files)
+    const sizeBonus = Math.max(0, 8000 - content.length) / 150;
     score += sizeBonus;
     
-    // Entry point files get bonus
-    if (filename === 'index.html' || filename === 'index.js' || filename === 'app.js' || 
-        filename === 'main.js' || filename === 'main.css' || filename.endsWith('/index.js')) {
-      score += 30;
-    }
+    // Entry points
+    const entryPoints = ['index.html', 'index.js', 'app.js', 'main.js', 'main.ts', 'app.tsx', 'main.tsx'];
+    if (entryPoints.some(ep => filename === ep || filename.endsWith('/' + ep))) score += 40;
     
-    // Config files usually not relevant
+    // Config files: penalize
     if (filename.includes('package.json') || filename.includes('.gitignore') || 
-        filename.includes('README') || filename.includes('node_modules')) {
-      score -= 50;
+        filename.includes('README') || filename.includes('node_modules') ||
+        filename.includes('vite.config') || filename.includes('tsconfig')) {
+      score -= 60;
     }
     
     return { filename, content, score };
   });
 
-  // Sort by score descending
   scoredFiles.sort((a, b) => b.score - a.score);
-  
-  // Take top N files
   const selected = scoredFiles.slice(0, TOKEN_BUDGET.MAX_FILES);
   
-  // Always include active file if it exists and wasn't in top N
+  // Force-include active file
   if (activeFile && projectFiles[activeFile] && !selected.find(f => f.filename === activeFile)) {
-    selected.pop(); // Remove lowest scored
-    selected.push({ 
-      filename: activeFile, 
-      content: projectFiles[activeFile], 
-      score: 9999 
-    });
+    selected.pop();
+    selected.push({ filename: activeFile, content: projectFiles[activeFile], score: 9999 });
   }
   
-  // Always include index.html if it exists (entry point)
+  // Force-include index.html
   if (projectFiles['index.html'] && !selected.find(f => f.filename === 'index.html')) {
-    const idxEntry = scoredFiles.find(f => f.filename === 'index.html');
-    if (idxEntry) {
-      selected.pop();
-      selected.push(idxEntry);
-    }
+    const idx = scoredFiles.find(f => f.filename === 'index.html');
+    if (idx) { selected.pop(); selected.push(idx); }
   }
 
-  return Object.fromEntries(
-    selected.map(({ filename, content }) => [filename, truncateContent(content)])
-  );
+  return Object.fromEntries(selected.map(({ filename, content }) => [filename, truncateContent(content)]));
 }
 
-/**
- * Truncates file content to stay within token budget per file.
- */
+function buildImportMap(entries) {
+  const map = {};
+  const importRegex = /(?:import|require)\s*\(?['"]([^'"]+)['"]\)?/g;
+  
+  for (const [filename, content] of entries) {
+    map[filename] = [];
+    let match;
+    while ((match = importRegex.exec(content)) !== null) {
+      const importPath = match[1];
+      // Resolve relative imports to filenames
+      if (importPath.startsWith('.')) {
+        const dir = filename.includes('/') ? filename.substring(0, filename.lastIndexOf('/') + 1) : '';
+        const resolved = resolveImportPath(dir, importPath, entries);
+        if (resolved) map[filename].push(resolved);
+      }
+    }
+  }
+  return map;
+}
+
+function resolveImportPath(dir, importPath, entries) {
+  const candidates = [
+    dir + importPath,
+    dir + importPath + '.js',
+    dir + importPath + '.ts',
+    dir + importPath + '.tsx',
+    dir + importPath + '/index.js',
+    dir + importPath + '/index.ts',
+  ];
+  const fileSet = new Set(entries.map(([name]) => name));
+  return candidates.find(c => fileSet.has(c)) || null;
+}
+
 function truncateContent(content) {
   if (!content || content.length <= TOKEN_BUDGET.MAX_FILE_CHARS) return content;
-  
   const lines = content.split('\n');
   let result = '';
   let charCount = 0;
-  
-  // Take first N lines that fit
   for (const line of lines) {
     if (charCount + line.length + 1 > TOKEN_BUDGET.MAX_FILE_CHARS) {
-      result += `\n... [truncated, ${content.length - charCount} more chars, ${lines.length - result.split('\n').length} more lines]`;
+      result += `\n... [truncated: ${content.length - charCount} chars, ${lines.length - result.split('\n').length} lines remaining]`;
       break;
     }
     result += line + '\n';
     charCount += line.length + 1;
   }
-  
   return result.trimEnd();
 }
 
-/**
- * Builds a compact file tree showing only up to TREE_MAX_FILES.
- */
 function buildCompactTree(filenames, selectedFiles) {
   const selectedSet = new Set(Object.keys(selectedFiles));
   const allFiles = filenames.slice(0, TOKEN_BUDGET.TREE_MAX_FILES);
   const remaining = Math.max(0, filenames.length - TOKEN_BUDGET.TREE_MAX_FILES);
   
   const tree = {};
-  
   for (const filepath of allFiles) {
     const parts = filepath.split('/');
     let current = tree;
@@ -249,11 +306,9 @@ function buildCompactTree(filenames, selectedFiles) {
       const connector = isLast ? '└── ' : '├── ';
       const childPrefix = prefix + (isLast ? '    ' : '│   ');
       
-      if (child === null) {
-        result += prefix + connector + name + '\n';
-      } else if (child === '★') {
-        result += prefix + connector + name + ' ★\n';
-      } else {
+      if (child === null) result += prefix + connector + name + '\n';
+      else if (child === '★') result += prefix + connector + name + ' ★\n';
+      else {
         result += prefix + connector + name + '/\n';
         result += render(child, childPrefix);
       }
@@ -265,51 +320,88 @@ function buildCompactTree(filenames, selectedFiles) {
   if (remaining > 0) {
     output += `\n... and ${remaining} more files (showing ${TOKEN_BUDGET.TREE_MAX_FILES} of ${filenames.length})`;
   }
-  
   return output;
 }
 
 // ─── PROMPT BUILDING ────────────────────────────────────────────────
 
-function buildPrompt(projectFiles, userMessage, activeFile = null) {
+function buildPrompt(projectFiles, userMessage, options = {}) {
+  const {
+    activeFile = null,
+    recentFiles = [],
+    consoleErrors = [],
+    buildErrors = [],
+    cursorPosition = null,
+    selectedCode = null,
+    chatHistory = [],
+  } = options;
+
   const fileEntries = Object.entries(projectFiles);
-  
+  const mode = detectMode(userMessage, { consoleErrors, buildErrors });
+  const systemPrompt = MODE_PROMPTS[mode] || MODE_PROMPTS.generic;
+
   if (fileEntries.length === 0) {
-    return `User: ${userMessage}\n\n(No files open currently)`;
+    return { messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }], mode };
   }
 
-  // For large projects, select only relevant files
-  const selectedFiles = selectRelevantFiles(projectFiles, userMessage, activeFile);
+  const selectedFiles = selectRelevantFiles(projectFiles, userMessage, activeFile, recentFiles);
   const allFilenames = Object.keys(projectFiles);
-  
   const tree = buildCompactTree(allFilenames, selectedFiles);
-  
+
+  let contextParts = [];
+
+  // File tree
+  contextParts.push(`PROJECT STRUCTURE:\n${tree}`);
+
+  // Selected files with content
   const filesContext = Object.entries(selectedFiles).map(([filename, content]) => {
     const lines = content.split('\n');
     return `=== FILE: ${filename} (${lines.length} lines) ===\n\`\`\`\n${content}\n\`\`\``;
   }).join('\n\n');
+  contextParts.push(filesContext);
 
-  const activeHint = activeFile 
-    ? `\n\nCURRENTLY EDITING: ${activeFile}\nThis is the file the user is most likely asking about.` 
-    : '';
+  // Active file focus
+  if (activeFile) {
+    contextParts.push(`\nCURRENTLY EDITING: ${activeFile}`);
+    if (cursorPosition) {
+      contextParts.push(`Cursor at line ${cursorPosition.line}, column ${cursorPosition.column}`);
+    }
+    if (selectedCode) {
+      contextParts.push(`SELECTED CODE:\n\`\`\`\n${selectedCode}\n\`\`\``);
+    }
+  }
 
-  const selectionNote = fileEntries.length > TOKEN_BUDGET.MAX_FILES
-    ? `\n\nNOTE: This project has ${fileEntries.length} files. Only the most relevant ${Object.keys(selectedFiles).length} files are shown above. If you need to see other files, ask specifically.`
-    : '';
+  // Errors
+  if (consoleErrors.length > 0) {
+    contextParts.push(`\nCONSOLE ERRORS:\n${consoleErrors.map(e => `- ${e}`).join('\n')}`);
+  }
+  if (buildErrors.length > 0) {
+    contextParts.push(`\nBUILD ERRORS:\n${buildErrors.map(e => `- ${e}`).join('\n')}`);
+  }
 
-  return `PROJECT STRUCTURE:
-${tree}
+  // File count note
+  if (fileEntries.length > TOKEN_BUDGET.MAX_FILES) {
+    contextParts.push(`\nNOTE: Project has ${fileEntries.length} files. Showing ${Object.keys(selectedFiles).length} most relevant. Ask for specific files if needed.`);
+  }
 
-${filesContext}${activeHint}${selectionNote}
+  contextParts.push(`\nUSER REQUEST: ${userMessage}`);
 
-INSTRUCTION: ${userMessage}
+  const fullPrompt = contextParts.join('\n\n');
 
-REMEMBER:
-- Reference files by their full path (e.g., "Lson/index.js")
-- When editing nested files, use format: \`\`\`edit:Lson/index.js
-- Only show changed code in \`\`\`edit:filepath\`\`\` blocks
-- Do NOT output full files unless explicitly asked
-- The user is currently looking at: ${activeFile || 'no specific file'}`;
+  const messages = [{ role: 'system', content: systemPrompt }];
+  
+  // Add recent chat history for context
+  const trimmedHistory = chatHistory.slice(-6);
+  for (const msg of trimmedHistory) {
+    messages.push({
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: msg.content,
+    });
+  }
+
+  messages.push({ role: 'user', content: fullPrompt });
+
+  return { messages, mode };
 }
 
 // ─── OPENROUTER ─────────────────────────────────────────────────────
@@ -322,9 +414,7 @@ export async function fetchOpenRouterFreeModels() {
     }
 
     const response = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: OPENROUTER_API_KEY ? {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-      } : {},
+      headers: OPENROUTER_API_KEY ? { 'Authorization': `Bearer ${OPENROUTER_API_KEY}` } : {},
     });
 
     if (!response.ok) {
@@ -333,7 +423,6 @@ export async function fetchOpenRouterFreeModels() {
     }
 
     const data = await response.json();
-    
     const freeModels = data.data
       ?.filter(m => {
         const isFreeSlug = m.id?.endsWith(':free');
@@ -350,8 +439,7 @@ export async function fetchOpenRouterFreeModels() {
 
     cachedFreeModels = merged;
     lastModelFetch = now;
-    
-    console.log(`OpenRouter free models refreshed: ${merged.length} models available`);
+    console.log(`OpenRouter free models: ${merged.length} available`);
     return merged;
   } catch (error) {
     console.warn('Error fetching OpenRouter models:', error.message);
@@ -360,9 +448,7 @@ export async function fetchOpenRouterFreeModels() {
 }
 
 async function callOpenRouter(messages, preferredModel = null) {
-  if (!OPENROUTER_API_KEY) {
-    throw new Error('OPENROUTER_API_KEY not set');
-  }
+  if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
 
   const freeModels = await fetchOpenRouterFreeModels();
   const modelsToTry = preferredModel 
@@ -370,11 +456,8 @@ async function callOpenRouter(messages, preferredModel = null) {
     : freeModels;
 
   let lastError;
-
   for (const model of modelsToTry) {
     try {
-      console.log(`Trying OpenRouter model: ${model}`);
-      
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -386,15 +469,15 @@ async function callOpenRouter(messages, preferredModel = null) {
         body: JSON.stringify({
           model,
           messages,
-          temperature: 0.7,
-          max_tokens: 4096,
+          temperature: 0.3,
+          max_tokens: 8192,
           route: 'fallback',
         }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        if (response.status === 429 || response.status === 503 || response.status === 404) {
+        if ([429, 503, 404].includes(response.status)) {
           console.warn(`Model ${model} unavailable (${response.status}), trying next...`);
           lastError = new Error(`OpenRouter ${model}: ${errorText}`);
           continue;
@@ -403,12 +486,10 @@ async function callOpenRouter(messages, preferredModel = null) {
       }
 
       const data = await response.json();
-      
-      if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      if (!data.choices?.[0]?.message?.content) {
         throw new Error('Invalid response from OpenRouter');
       }
 
-      console.log(`OpenRouter success with model: ${model}`);
       return {
         content: data.choices[0].message.content,
         model: data.model || model,
@@ -424,9 +505,7 @@ async function callOpenRouter(messages, preferredModel = null) {
 }
 
 async function streamOpenRouter(messages, onChunk, preferredModel = null) {
-  if (!OPENROUTER_API_KEY) {
-    throw new Error('OPENROUTER_API_KEY not set');
-  }
+  if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
 
   const freeModels = await fetchOpenRouterFreeModels();
   const modelsToTry = preferredModel 
@@ -434,11 +513,8 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
     : freeModels;
 
   let lastError;
-
   for (const model of modelsToTry) {
     try {
-      console.log(`Trying OpenRouter stream with model: ${model}`);
-      
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -450,8 +526,8 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
         body: JSON.stringify({
           model,
           messages,
-          temperature: 0.7,
-          max_tokens: 4096,
+          temperature: 0.3,
+          max_tokens: 8192,
           stream: true,
           route: 'fallback',
         }),
@@ -459,8 +535,7 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        if (response.status === 429 || response.status === 503 || response.status === 404) {
-          console.warn(`Model ${model} unavailable (${response.status}), trying next...`);
+        if ([429, 503, 404].includes(response.status)) {
           lastError = new Error(`OpenRouter ${model}: ${errorText}`);
           continue;
         }
@@ -486,19 +561,15 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
           try {
             const parsed = JSON.parse(data);
             if (parsed.model) actualModel = parsed.model;
-            
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               fullText += content;
               if (onChunk) onChunk(content);
             }
-          } catch {
-            // Skip invalid JSON
-          }
+          } catch { /* skip invalid JSON */ }
         }
       }
 
-      console.log(`OpenRouter stream success with model: ${actualModel}`);
       return {
         content: cleanResponse(fullText),
         model: actualModel,
@@ -516,9 +587,7 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
 // ─── GROQ ─────────────────────────────────────────────────────────
 
 async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-instruct') {
-  if (!GROQ_API_KEY) {
-    throw new Error('GROQ_API_KEY not set');
-  }
+  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not set');
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -529,8 +598,8 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
     body: JSON.stringify({
       model,
       messages,
-      temperature: 0.7,
-      max_tokens: 4096,
+      temperature: 0.3,
+      max_tokens: 8192,
     }),
   });
 
@@ -540,8 +609,7 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
   }
 
   const data = await response.json();
-  
-  if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+  if (!data.choices?.[0]?.message?.content) {
     throw new Error('Invalid response from Groq');
   }
 
@@ -553,9 +621,7 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
 }
 
 async function streamGroq(messages, onChunk) {
-  if (!GROQ_API_KEY) {
-    throw new Error('GROQ_API_KEY not set');
-  }
+  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not set');
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -566,8 +632,8 @@ async function streamGroq(messages, onChunk) {
     body: JSON.stringify({
       model: 'meta-llama/llama-4-scout-17b-16e-instruct',
       messages,
-      temperature: 0.7,
-      max_tokens: 4096,
+      temperature: 0.3,
+      max_tokens: 8192,
       stream: true,
     }),
   });
@@ -598,9 +664,7 @@ async function streamGroq(messages, onChunk) {
           fullText += content;
           if (onChunk) onChunk(content);
         }
-      } catch {
-        // Skip invalid JSON
-      }
+      } catch { /* skip invalid JSON */ }
     }
   }
 
@@ -611,56 +675,238 @@ async function streamGroq(messages, onChunk) {
   };
 }
 
+// ─── GEMINI-SPECIFIC SYSTEM PROMPT ─────────────────────────────────
+
+const GEMINI_SYSTEM = `You are a code editor AI. You MUST follow these rules EXACTLY:
+
+RULE 1: When changing code, use ONLY this format:
+\`\`\`edit:FULL_FILE_PATH
+// complete file content here
+\`\`\`
+
+RULE 2: NEVER use any other format. No comments, no explanations inside code blocks.
+
+RULE 3: If you are not changing code, just chat normally.
+
+RULE 4: Example of CORRECT output:
+I will update the styles.
+\`\`\`edit:styles.css
+body { margin: 0; padding: 0; }
+\`\`\`
+
+RULE 5: Example of WRONG output (NEVER do this):
+Here is the CSS:
+\`\`\`css
+body { margin: 0; }
+\`\`\`
+
+RULE 6: The edit block must contain the COMPLETE file content, not just changes.
+
+RULE 7: After giving code, say: **File Completed:** filename`;
+
 // ─── GEMINI ─────────────────────────────────────────────────────────
 
-async function callGemini(prompt, model = 'gemini-2.5-flash') {
-  if (!geminiClient) {
-    throw new Error('GEMINI_API_KEY not set');
+async function callGemini(messages, model = 'gemini-2.5-flash') {
+  if (!geminiClient) throw new Error('GEMINI_API_KEY not set');
+
+  // Convert OpenAI-style messages to Gemini format
+  const systemMsg = messages.find(m => m.role === 'system')?.content || '';
+  const userMessages = messages.filter(m => m.role !== 'system');
+  
+  // Combine system + user messages for Gemini (it handles systemInstruction differently)
+  const fullPrompt = GEMINI_SYSTEM + '\n\n=== PROJECT CONTEXT ===\n' + 
+    userMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+
+  try {
+    const result = await geminiClient.models.generateContent({
+      model,
+      contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+      config: {
+        maxOutputTokens: 8192,
+        temperature: 0.1, // Lower = more deterministic
+        topP: 0.1,        // Lower = follows format more strictly
+      },
+    });
+
+    // Extract text safely
+    let text = '';
+    if (result.text) {
+      text = result.text;
+    } else if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+      text = result.candidates[0].content.parts[0].text;
+    }
+
+    console.log(`[Gemini] Raw response length: ${text?.length || 0}`);
+    console.log(`[Gemini] First 200 chars: ${text?.slice(0, 200)}`);
+
+    if (!text || text.trim().length === 0) {
+      const finishReason = result.candidates?.[0]?.finishReason;
+      throw new Error(`Gemini empty response. Finish reason: ${finishReason || 'unknown'}`);
+    }
+
+    return {
+      content: text,
+      model,
+      provider: 'gemini',
+    };
+  } catch (error) {
+    console.error('[Gemini] Error:', error.message);
+    throw error;
   }
-
-  const result = await geminiClient.models.generateContent({
-    model,
-    contents: [
-      { role: 'user', parts: [{ text: SYSTEM_INSTRUCTION + '\n\n' + prompt }] }
-    ],
-    config: {
-      maxOutputTokens: 4096,
-      temperature: 0.7,
-    },
-  });
-
-  return {
-    content: result.text,
-    model,
-    provider: 'gemini',
-  };
 }
 
-// ─── RESPONSE PARSING ───────────────────────────────────────────────
+// REAL streaming for Gemini
+async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
+  if (!geminiClient) throw new Error('GEMINI_API_KEY not set');
+
+  const systemMsg = messages.find(m => m.role === 'system')?.content || '';
+  const userMessages = messages.filter(m => m.role !== 'system');
+  
+  const fullPrompt = GEMINI_SYSTEM + '\n\n=== PROJECT CONTEXT ===\n' + 
+    userMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+
+  try {
+    const result = await geminiClient.models.generateContentStream({
+      model,
+      contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+      config: {
+        maxOutputTokens: 8192,
+        temperature: 0.1,
+        topP: 0.1,
+      },
+    });
+
+    let fullText = '';
+    
+    for await (const chunk of result) {
+      let text = '';
+      if (chunk.text) {
+        text = chunk.text;
+      } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
+        text = chunk.candidates[0].content.parts[0].text;
+      }
+
+      if (text) {
+        fullText += text;
+        if (onChunk) onChunk(text);
+      }
+    }
+
+    if (!fullText || fullText.trim().length === 0) {
+      throw new Error('Gemini streaming returned no content.');
+    }
+
+    return {
+      content: cleanResponse(fullText),
+      model,
+      provider: 'gemini',
+    };
+  } catch (error) {
+    console.error('[Gemini] Stream error:', error.message);
+    throw error;
+  }
+}
+
+// ─── RESPONSE CLEANING & PARSING ────────────────────────────────────
+
+function cleanResponse(text) {
+  if (!text) return '';
+  return text
+    // Strip AI UI artifacts
+    .replace(/text\s*Copy\s*Apply/gi, '')
+    .replace(/\bCopy\s*Apply\b/gi, '')
+    .replace(/```text\s*\n/g, '\n')
+    .replace(/```\s*text\s*/g, '')
+    // Strip suggestion comments that corrupt files
+    .replace(/\/\*[\s\S]*?AI[\s\S]*?SUGGESTION[\s\S]*?\*\//gi, '')
+    .replace(/<!--[\s\S]*?AI[\s\S]*?SUGGESTION[\s\S]*?-->/gi, '')
+    // Strip "Apply Edit" labels
+    .replace(/Apply\s*Edit/gi, '')
+    .trim();
+}
 
 export function parseAiResponse(response) {
-  if (!response) return { message: '', edits: [] };
+  if (!response) return { message: '', edits: [], mode: 'generic' };
 
-  const editRegex = /```edit:([^\n]+)\n([\s\S]*?)```/g;
+  // Clean the response first
+  const cleaned = typeof response === 'string' ? cleanResponse(response) : cleanResponse(response.content || '');
+
+  // Extract edit blocks — support multiple formats
+  const editPatterns = [
+    /```edit:([^\n]+)\n([\s\S]*?)```/g,        // Standard: ```edit:path
+    /```\s*edit:([^\n]+)\n([\s\S]*?)```/g,     // With space
+    /```file:([^\n]+)\n([\s\S]*?)```/g,         // Alternative: ```file:path
+    /```\s*([^\n]+\.(?:html|css|js|ts|tsx|jsx))\n([\s\S]*?)```/g, // Filename as language
+  ];
+
   const edits = [];
-  let match;
-  
-  while ((match = editRegex.exec(response)) !== null) {
-    edits.push({
-      filename: match[1].trim(),
-      code: match[2].trim()
-    });
+  for (const pattern of editPatterns) {
+    let match;
+    while ((match = pattern.exec(cleaned)) !== null) {
+      // Avoid duplicates
+      const existing = edits.find(e => e.filename === match[1].trim() && e.code === match[2].trim());
+      if (!existing) {
+        edits.push({ filename: match[1].trim(), code: match[2].trim() });
+      }
+    }
   }
 
-  let message = response
-    .replace(editRegex, '')
+  // FALLBACK: If no edits found, try to extract code blocks with language markers
+  if (edits.length === 0) {
+    const codeBlockRegex = /```(?:html|css|js|ts|tsx|jsx|javascript|typescript)\n([\s\S]*?)```/g;
+    let match;
+    while ((match = codeBlockRegex.exec(cleaned)) !== null) {
+      const filename = guessFilenameFromContext(cleaned, match[1]);
+      if (filename) {
+        edits.push({ filename, code: match[1].trim() });
+      }
+    }
+  }
+
+  // Detect if AI used File Completed marker
+  const fileCompletedRegex = /\*\*File Completed:\s*([^\n]+)\*\*/i;
+  const completedMatch = cleaned.match(fileCompletedRegex);
+
+  // Remove edit blocks from message for clean chat display
+  let message = cleaned;
+  for (const pattern of editPatterns) {
+    message = message.replace(pattern, '');
+  }
+  
+  message = message
+    .replace(/\*\*File Completed:[^\n]*\*\*/gi, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  return { message, edits };
+  // Detect mode from response content
+  let detectedMode = 'generic';
+  if (message.includes('BUG:') || message.includes('FIX:')) detectedMode = 'debug';
+  else if (message.includes('REVIEW:') || message.includes('ISSUE:')) detectedMode = 'review';
+  else if (message.includes('EXPLANATION:')) detectedMode = 'explain';
+  else if (edits.length > 0) detectedMode = 'code';
+
+  return { message, edits, mode: detectedMode, completedFile: completedMatch?.[1]?.trim() };
 }
 
-export function applyEdits(projectFiles, edits) {
+// Helper function for fallback filename detection
+function guessFilenameFromContext(text, code) {
+  // Look for "update FILE" or "change FILE" patterns
+  const fileMatch = text.match(/(?:update|change|edit|modify|fix)\s+['"]?([^'"\s]+\.(?:html|css|js|ts|tsx|jsx))['"]?/i);
+  if (fileMatch) return fileMatch[1];
+  
+  // Try to detect file type from code content
+  if (code.includes('<!DOCTYPE') || code.includes('<html')) return 'index.html';
+  if (code.includes('@tailwind') || code.includes(':root {') || code.includes('@import')) return 'styles.css';
+  if (code.includes('import React') || code.includes('export default')) return 'App.tsx';
+  if (code.includes('import {') && code.includes('from')) return 'App.tsx';
+  
+  return null;
+}
+
+// ─── SMART EDIT APPLICATION ────────────────────────────────────────
+
+export function applyEdits(projectFiles, edits, options = {}) {
+  const { activeFile = null, strategy = 'smart' } = options;
   const updatedFiles = { ...projectFiles };
   const applied = [];
   const failed = [];
@@ -668,6 +914,13 @@ export function applyEdits(projectFiles, edits) {
   for (const edit of edits) {
     const { filename, code } = edit;
     
+    // Validate: reject empty or suspicious edits
+    if (!code || code.length < 5) {
+      failed.push({ filename, reason: 'Empty or too short edit block' });
+      continue;
+    }
+
+    // New file
     if (!updatedFiles.hasOwnProperty(filename)) {
       updatedFiles[filename] = code;
       applied.push({ filename, type: 'created' });
@@ -676,38 +929,74 @@ export function applyEdits(projectFiles, edits) {
 
     const original = updatedFiles[filename];
     
-    if (code.length < original.length * 0.8) {
-      const normalizedCode = code.replace(/\s+/g, ' ').trim();
-      const normalizedOriginal = original.replace(/\s+/g, ' ').trim();
-      
-      if (normalizedOriginal.includes(normalizedCode)) {
-        applied.push({ filename, type: 'unchanged' });
-        continue;
-      }
-    }
-
-    if (code.includes('<!DOCTYPE') || code.includes('<html') || 
-        code.includes('export default') || code.includes('function') ||
-        code.length > original.length * 0.5) {
+    if (strategy === 'replace') {
       updatedFiles[filename] = code;
       applied.push({ filename, type: 'replaced' });
+      continue;
+    }
+
+    // Smart strategy: try to find where to insert
+    const result = smartApplyEdit(original, code, filename === activeFile);
+    
+    if (result.success) {
+      updatedFiles[filename] = result.content;
+      applied.push({ filename, type: result.type });
     } else {
-      updatedFiles[filename] = original + `\n\n/* AI SUGGESTION for ${filename}:\n${code}\n*/`;
-      applied.push({ filename, type: 'appended' });
-      failed.push({ filename, reason: 'Could not determine exact insertion point. Suggestion appended as comment.' });
+      // NEVER append as comment — just report failure
+      failed.push({ filename, reason: result.reason });
+      console.warn(`[AI] Edit failed for ${filename}: ${result.reason}`);
     }
   }
 
   return { updatedFiles, applied, failed };
 }
 
-function cleanResponse(text) {
-  if (!text) return '';
-  return text
-    .replace(/text\s*Copy\s*Apply/gi, '')
-    .replace(/\bCopy\s*Apply\b/gi, '')
-    .replace(/```text\s*\n/g, '\n')
-    .replace(/```\s*text\s*/g, '');
+function smartApplyEdit(original, newCode, isActiveFile) {
+  // If new code is clearly a full file replacement
+  if (newCode.includes('<!DOCTYPE') || newCode.includes('<html') || 
+      (newCode.includes('export default') && original.includes('export default')) ||
+      newCode.length > original.length * 0.85) {
+    return { success: true, content: newCode, type: 'replaced' };
+  }
+
+  // Try to find a function/class to replace
+  const funcRegex = /(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+(\w+)|class\s+(\w+)|const\s+(\w+)\s*=\s*(?:async\s*)?\(/g;
+  const newFuncs = [];
+  let m;
+  while ((m = funcRegex.exec(newCode)) !== null) {
+    newFuncs.push(m[1] || m[2] || m[3]);
+  }
+
+  if (newFuncs.length === 1) {
+    // Try to replace just that function in original
+    const funcName = newFuncs[0];
+    const funcPattern = new RegExp(
+      `((?:export\\s+(?:default\\s+)?)?(?:async\\s+)?(?:function\\s+|class\\s+|const\\s+)${funcName}\\s*[=(])` +
+      `[\\s\\S]*?(?=(?:\\n(?:export\\s|class\\s|function\\s|const\\s|let\\s|var\\s)|$))`,
+      'm'
+    );
+    
+    if (funcPattern.test(original)) {
+      const replaced = original.replace(funcPattern, newCode.trim());
+      if (replaced !== original) {
+        return { success: true, content: replaced, type: 'patched' };
+      }
+    }
+  }
+
+  // If it's a small addition and we know the active file, try appending
+  if (isActiveFile && newCode.length < original.length * 0.3) {
+    return { 
+      success: true, 
+      content: original + '\n\n' + newCode,
+      type: 'appended' 
+    };
+  }
+
+  return { 
+    success: false, 
+    reason: 'Could not determine insertion point. Code does not match any existing function/class. Ask the user to clarify.' 
+  };
 }
 
 // ─── PROVIDER CHAIN ─────────────────────────────────────────────────
@@ -718,127 +1007,95 @@ function getProviderChain(preferredProvider = 'openrouter') {
   
   return ordered.map(p => {
     switch (p) {
-      case 'openrouter':
-        return { name: 'openrouter', call: (msgs) => callOpenRouter(msgs) };
-      case 'groq':
-        return { name: 'groq', call: (msgs) => callGroq(msgs) };
-      case 'gemini':
-        return { name: 'gemini', call: null };
-      default:
-        return { name: 'openrouter', call: (msgs) => callOpenRouter(msgs) };
+      case 'openrouter': return { name: 'openrouter', call: (msgs) => callOpenRouter(msgs) };
+      case 'groq': return { name: 'groq', call: (msgs) => callGroq(msgs) };
+      case 'gemini': return { name: 'gemini', call: (msgs) => callGemini(msgs, 'gemini-2.5-flash') };
+      default: return { name: 'openrouter', call: (msgs) => callOpenRouter(msgs) };
+    }
+  });
+}
+
+function getStreamProviderChain(preferredProvider = 'openrouter') {
+  const allProviders = ['openrouter', 'groq', 'gemini'];
+  const ordered = [preferredProvider, ...allProviders.filter(p => p !== preferredProvider)];
+  
+  return ordered.map(p => {
+    switch (p) {
+      case 'openrouter': return { name: 'openrouter', call: (msgs, onChunk) => streamOpenRouter(msgs, onChunk) };
+      case 'groq': return { name: 'groq', call: (msgs, onChunk) => streamGroq(msgs, onChunk) };
+      case 'gemini': return { name: 'gemini', call: (msgs, onChunk) => streamGemini(msgs, onChunk, 'gemini-2.5-flash') };
+      default: return { name: 'openrouter', call: (msgs, onChunk) => streamOpenRouter(msgs, onChunk) };
     }
   });
 }
 
 // ─── MAIN GENERATION ────────────────────────────────────────────────
 
-export async function generateCodeResponse(projectFiles, userMessage, chatHistory = [], provider = 'openrouter', activeFile = null) {
+export async function generateCodeResponse(projectFiles, userMessage, options = {}) {
+  const { provider = 'openrouter' } = options;
+  
   try {
-    const prompt = buildPrompt(projectFiles, userMessage, activeFile);
-    
-    const messages = [
-      { role: 'system', content: SYSTEM_INSTRUCTION },
-    ];
-
-    const trimmedHistory = chatHistory.slice(-5);
-    for (const msg of trimmedHistory) {
-      messages.push({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content,
-      });
-    }
-
-    messages.push({ role: 'user', content: prompt });
+    const { messages, mode } = buildPrompt(projectFiles, userMessage, options);
+    console.log(`[AI] Mode detected: ${mode}, Provider: ${provider}`);
 
     const chain = getProviderChain(provider);
     let lastError;
 
     for (const { name, call } of chain) {
       try {
-        let result;
-        
-        if (name === 'gemini') {
-          result = await callGemini(prompt, 'gemini-2.5-flash');
-        } else {
-          result = await call(messages);
-        }
-
-        if (!result || !result.content) continue;
+        const result = await call(messages);
+        if (!result?.content) continue;
         
         const cleaned = cleanResponse(result.content);
-        console.log(`Success with provider: ${name}, model: ${result.model}, length: ${cleaned.length}`);
+        console.log(`[AI] Success: ${name}/${result.model}, length: ${cleaned.length}, mode: ${mode}`);
         
         return cleaned;
       } catch (error) {
-        console.warn(`Provider ${name} failed:`, error.message);
+        console.warn(`[AI] Provider ${name} failed:`, error.message);
         lastError = error;
-        continue;
       }
     }
 
-    console.error('All AI providers failed:', lastError);
+    console.error('[AI] All providers failed:', lastError);
     return getFallbackResponse();
   } catch (error) {
-    console.error('generateCodeResponse error:', error);
+    console.error('[AI] generateCodeResponse error:', error);
     return getFallbackResponse();
   }
 }
 
-export async function streamCodeResponse(projectFiles, userMessage, chatHistory = [], onChunk, provider = 'openrouter', activeFile = null) {
+export async function streamCodeResponse(projectFiles, userMessage, onChunk, options = {}) {
+  const { provider = 'openrouter' } = options;
+  
   try {
-    const prompt = buildPrompt(projectFiles, userMessage, activeFile);
+    const { messages, mode } = buildPrompt(projectFiles, userMessage, options);
+    console.log(`[AI] Stream mode: ${mode}, Provider: ${provider}`);
 
-    if (provider === 'gemini') {
-      const response = await generateCodeResponse(projectFiles, userMessage, chatHistory, 'gemini', activeFile);
-      if (onChunk) {
-        const chunks = response.split(' ');
-        for (const chunk of chunks) {
-          onChunk(chunk + ' ');
-          await new Promise(r => setTimeout(r, 20));
-        }
-      }
-      return response;
-    }
-
-    const messages = [
-      { role: 'system', content: SYSTEM_INSTRUCTION },
-      ...chatHistory.slice(-5).map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.content,
-      })),
-      { role: 'user', content: prompt },
-    ];
-
-    const streamProviders = provider === 'openrouter' 
-      ? [
-          { name: 'openrouter', call: () => streamOpenRouter(messages, onChunk) },
-          { name: 'groq', call: () => streamGroq(messages, onChunk) },
-        ]
-      : [
-          { name: 'groq', call: () => streamGroq(messages, onChunk) },
-          { name: 'openrouter', call: () => streamOpenRouter(messages, onChunk) },
-        ];
-
+    const chain = getStreamProviderChain(provider);
     let lastError;
-    for (const { name, call } of streamProviders) {
+
+    for (const { name, call } of chain) {
       try {
-        const result = await call();
-        console.log(`Stream success with provider: ${name}, model: ${result.model}`);
+        const result = await call(messages, onChunk);
+        console.log(`[AI] Stream success: ${name}/${result.model}`);
         return result.content;
       } catch (error) {
-        console.warn(`Stream provider ${name} failed:`, error.message);
+        console.warn(`[AI] Stream provider ${name} failed:`, error.message);
         lastError = error;
-        continue;
       }
     }
 
     throw lastError || new Error('All streaming providers failed');
   } catch (error) {
-    console.error('streamCodeResponse error:', error);
+    console.error('[AI] streamCodeResponse error:', error);
     const fallback = getFallbackResponse();
     if (onChunk) onChunk(fallback);
     return fallback;
   }
+}
+
+function getFallbackResponse() {
+  return 'I apologize, but I encountered an error processing your request. Please check your API configuration and try again.';
 }
 
 // ─── HEALTH CHECKS ──────────────────────────────────────────────────
@@ -853,11 +1110,7 @@ export async function testConnection() {
         { role: 'user', content: 'Say "OK" in one word.' },
       ];
       const response = await callOpenRouter(messages);
-      results.openrouter = { 
-        status: 'ok', 
-        response: response.content.trim(),
-        model: response.model,
-      };
+      results.openrouter = { status: 'ok', response: response.content.trim(), model: response.model };
     } catch (error) {
       results.openrouter = { status: 'error', error: error.message };
     }
@@ -871,7 +1124,7 @@ export async function testConnection() {
         { role: 'system', content: 'You are a helpful assistant.' },
         { role: 'user', content: 'Say "OK" in one word.' },
       ];
-      const response = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct');
+      const response = await callGroq(messages);
       results.groq = { status: 'ok', response: response.content.trim() };
     } catch (error) {
       results.groq = { status: 'error', error: error.message };
@@ -882,7 +1135,8 @@ export async function testConnection() {
 
   if (geminiClient) {
     try {
-      const response = await callGemini('Say "OK" in one word.', 'gemini-2.5-flash');
+      const messages = [{ role: 'user', content: 'Say "OK" in one word.' }];
+      const response = await callGemini(messages);
       results.gemini = { status: 'ok', response: response.content.trim() };
     } catch (error) {
       results.gemini = { status: 'error', error: error.message };
@@ -896,20 +1150,9 @@ export async function testConnection() {
 
 export async function getAvailableModels() {
   const freeModels = await fetchOpenRouterFreeModels();
-  
   return {
-    openrouter: {
-      configured: !!OPENROUTER_API_KEY,
-      freeModels: freeModels,
-      defaultModels: DEFAULT_FREE_MODELS,
-    },
-    groq: {
-      configured: !!GROQ_API_KEY,
-      models: ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.3-70b-versatile'],
-    },
-    gemini: {
-      configured: !!GEMINI_API_KEY,
-      models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-    },
+    openrouter: { configured: !!OPENROUTER_API_KEY, freeModels, defaultModels: DEFAULT_FREE_MODELS },
+    groq: { configured: !!GROQ_API_KEY, models: ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.3-70b-versatile'] },
+    gemini: { configured: !!GEMINI_API_KEY, models: ['gemini-2.5-flash', 'gemini-2.5-pro'] },
   };
 }

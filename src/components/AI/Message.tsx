@@ -1,6 +1,6 @@
 // src/components/AI/Message.tsx
-import { useState, useCallback } from 'react';
-import { User, Bot, Copy, Check, FileCode, FileType, Braces, Wand2 } from 'lucide-react';
+import { useState, useCallback, memo } from 'react';
+import { User, Bot, Copy, Check, FileCode, FileType, Braces, Wand2, Loader2 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
@@ -10,12 +10,14 @@ interface MessageProps {
   role: string;
   content: string;
   timestamp: number;
+  isStreaming?: boolean;
 }
 
 interface CodeBlock {
   language: string;
   code: string;
   filename: string | null;
+  isEdit: boolean;
 }
 
 function getFileIcon(language: string) {
@@ -28,7 +30,8 @@ function getFileIcon(language: string) {
   }
 }
 
-function getLanguageColor(language: string): string {
+function getLanguageColor(language: string, isEdit: boolean): string {
+  if (isEdit) return 'border-emerald-500/40 bg-emerald-500/5';
   switch (language) {
     case 'html': return 'border-orange-500/30 bg-orange-500/10';
     case 'css': return 'border-blue-500/30 bg-blue-500/10';
@@ -40,37 +43,125 @@ function getLanguageColor(language: string): string {
   }
 }
 
-function extractEditBlocks(content: string): CodeBlock[] {
+function extractCodeBlocks(content: string): CodeBlock[] {
   const blocks: CodeBlock[] = [];
+  
+  // Extract edit blocks first (higher priority)
   const editRegex = /```edit:([^\n]+)\n([\s\S]*?)```/g;
   let match;
   while ((match = editRegex.exec(content)) !== null) {
     const filename = match[1].trim();
     const code = match[2].trim();
     const ext = filename.split('.').pop()?.toLowerCase() || '';
-    const language = ext === 'html' ? 'html' : ext === 'css' ? 'css' : ext === 'js' ? 'javascript' : ext === 'ts' ? 'typescript' : 'text';
-    blocks.push({ language, code, filename });
+    const language = ext === 'html' ? 'html' : ext === 'css' ? 'css' : ext === 'js' ? 'javascript' : ext === 'ts' ? 'typescript' : ext === 'tsx' ? 'typescript' : ext === 'jsx' ? 'javascript' : 'text';
+    blocks.push({ language, code, filename, isEdit: true });
   }
-  return blocks;
-}
 
-function extractRegularCodeBlocks(content: string): CodeBlock[] {
-  const blocks: CodeBlock[] = [];
+  // Extract regular code blocks
   const codeRegex = /```(\w+)?\n([\s\S]*?)```/g;
-  let match;
   while ((match = codeRegex.exec(content)) !== null) {
     const language = match[1] || 'text';
     const code = match[2].trim();
+    // Skip if already captured as edit block
+    if (blocks.some(b => b.code === code && b.isEdit)) continue;
+    
     let filename = null;
     if (language === 'html') filename = 'index.html';
     else if (language === 'css') filename = 'style.css';
     else if (language === 'javascript' || language === 'js') filename = 'script.js';
-    blocks.push({ language, code, filename });
+    blocks.push({ language, code, filename, isEdit: false });
   }
+
   return blocks;
 }
 
-export default function Message({ role, content, timestamp }: MessageProps) {
+const CodeBlockComponent = memo(function CodeBlockComponent({ 
+  block, 
+  onCopy, 
+  onApply, 
+  copiedBlock 
+}: { 
+  block: CodeBlock;
+  onCopy: (code: string, id: string) => void;
+  onApply: (code: string, filename: string | null) => void;
+  copiedBlock: string | null;
+}) {
+  const blockId = `code-${block.code.slice(0, 20).replace(/\W/g, '')}-${Math.random().toString(36).substr(2, 5)}`;
+  const displayFilename = block.isEdit ? block.filename : block.filename;
+
+  return (
+    <div className={`rounded border overflow-hidden my-1.5 ${getLanguageColor(block.language, block.isEdit)}`}>
+      <div className="flex items-center justify-between px-2 py-1 bg-black/20 border-b border-inherit">
+        <div className="flex items-center gap-1.5">
+          {getFileIcon(block.language)}
+          <span className="text-[9px] font-medium text-[#8b949e] uppercase">{block.language}</span>
+          {block.isEdit && displayFilename && (
+            <span className="text-[9px] text-emerald-400 font-medium flex items-center gap-0.5">
+              <Wand2 className="w-2 h-2" />
+              {displayFilename}
+            </span>
+          )}
+          {!block.isEdit && displayFilename && (
+            <span className="text-[9px] text-[#58a6ff]">→ {displayFilename}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onCopy(block.code, blockId)}
+            className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] text-[#8b949e] hover:text-white hover:bg-white/10 transition-colors"
+          >
+            {copiedBlock === blockId ? (
+              <><Check className="w-2 h-2 text-emerald-400" /> Copied</>
+            ) : (
+              <><Copy className="w-2 h-2" /> Copy</>
+            )}
+          </button>
+          <button
+            onClick={() => onApply(block.code, displayFilename)}
+            className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] transition-colors ${
+              displayFilename 
+                ? 'bg-violet-600/20 hover:bg-violet-600/30 text-violet-400' 
+                : 'bg-[#30363d] text-[#484f58] cursor-not-allowed'
+            }`}
+            disabled={!displayFilename}
+          >
+            <Wand2 className="w-2 h-2" /> {block.isEdit ? 'Apply Edit' : 'Apply'}
+          </button>
+        </div>
+      </div>
+      <SyntaxHighlighter
+        language={block.language}
+        style={vscDarkPlus}
+        customStyle={{
+          margin: 0,
+          padding: '8px',
+          background: 'transparent',
+          fontSize: '10px',
+          lineHeight: '1.4',
+        }}
+        showLineNumbers
+        lineNumberStyle={{
+          color: '#484f58',
+          paddingRight: '8px',
+          minWidth: '24px',
+          fontSize: '9px',
+        }}
+      >
+        {block.code}
+      </SyntaxHighlighter>
+    </div>
+  );
+});
+
+const StreamingCursor = memo(function StreamingCursor() {
+  return (
+    <span className="inline-flex items-center ml-0.5">
+      <span className="w-1.5 h-3.5 bg-violet-400 animate-pulse inline-block" />
+    </span>
+  );
+});
+
+export default function Message({ role, content, timestamp, isStreaming }: MessageProps) {
   const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
   const isUser = role === 'user';
   const { updateFile } = useWorkspaceStore();
@@ -108,14 +199,12 @@ export default function Message({ role, content, timestamp }: MessageProps) {
   const timeStr = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   // Extract all code blocks with their target filenames
-  const editBlocks = extractEditBlocks(content);
-  const regularBlocks = extractRegularCodeBlocks(content);
-  const allBlocks = [...editBlocks, ...regularBlocks];
+  const codeBlocks = extractCodeBlocks(content);
 
-  // Build a map of code content -> filename for quick lookup in ReactMarkdown
-  const codeToFilename = new Map<string, string | null>();
-  allBlocks.forEach(block => {
-    codeToFilename.set(block.code, block.filename);
+  // Build a map of code content -> block info for quick lookup in ReactMarkdown
+  const codeToBlock = new Map<string, CodeBlock>();
+  codeBlocks.forEach(block => {
+    codeToBlock.set(block.code, block);
   });
 
   return (
@@ -142,67 +231,18 @@ export default function Message({ role, content, timestamp }: MessageProps) {
                     const match = /language-(\w+)/.exec(className || '');
                     const language = match ? match[1] : 'text';
                     const codeString = String(children).replace(/\n$/, '');
-                    const blockId = `code-${Math.random().toString(36).substr(2, 9)}`;
                     
-                    // Check if this code block has an associated filename
-                    const targetFilename = codeToFilename.get(codeString) || null;
+                    // Check if this code block has an associated block info
+                    const blockInfo = codeToBlock.get(codeString);
 
                     if (!inline && language !== 'text') {
                       return (
-                        <div className={`rounded border overflow-hidden my-1.5 ${getLanguageColor(language)}`}>
-                          <div className="flex items-center justify-between px-2 py-1 bg-black/20 border-b border-inherit">
-                            <div className="flex items-center gap-1">
-                              {getFileIcon(language)}
-                              <span className="text-[9px] font-medium text-[#8b949e] uppercase">{language}</span>
-                              {targetFilename && (
-                                <span className="text-[9px] text-emerald-400 ml-1">→ {targetFilename}</span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => handleCopy(codeString, blockId)}
-                                className="flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] text-[#8b949e] hover:text-white hover:bg-white/10 transition-colors"
-                              >
-                                {copiedBlock === blockId ? (
-                                  <><Check className="w-2 h-2 text-emerald-400" /> Copied</>
-                                ) : (
-                                  <><Copy className="w-2 h-2" /> Copy</>
-                                )}
-                              </button>
-                              <button
-                                onClick={() => handleApply(codeString, targetFilename)}
-                                className={`flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] transition-colors ${
-                                  targetFilename 
-                                    ? 'bg-violet-600/20 hover:bg-violet-600/30 text-violet-400' 
-                                    : 'bg-[#30363d] text-[#484f58] cursor-not-allowed'
-                                }`}
-                                disabled={!targetFilename}
-                              >
-                                <Wand2 className="w-2 h-2" /> Apply
-                              </button>
-                            </div>
-                          </div>
-                          <SyntaxHighlighter
-                            language={language}
-                            style={vscDarkPlus}
-                            customStyle={{
-                              margin: 0,
-                              padding: '8px',
-                              background: 'transparent',
-                              fontSize: '10px',
-                              lineHeight: '1.4',
-                            }}
-                            showLineNumbers
-                            lineNumberStyle={{
-                              color: '#484f58',
-                              paddingRight: '8px',
-                              minWidth: '24px',
-                              fontSize: '9px',
-                            }}
-                          >
-                            {codeString}
-                          </SyntaxHighlighter>
-                        </div>
+                        <CodeBlockComponent
+                          block={blockInfo || { language, code: codeString, filename: null, isEdit: false }}
+                          onCopy={handleCopy}
+                          onApply={handleApply}
+                          copiedBlock={copiedBlock}
+                        />
                       );
                     }
 
@@ -215,12 +255,17 @@ export default function Message({ role, content, timestamp }: MessageProps) {
                   h1: ({ children }: any) => <h1 className="text-sm font-bold text-white mt-2 mb-1">{children}</h1>,
                   h2: ({ children }: any) => <h2 className="text-xs font-semibold text-[#58a6ff] mt-2 mb-1">{children}</h2>,
                   h3: ({ children }: any) => <h3 className="text-[11px] font-semibold text-[#7ee787] mt-1.5 mb-0.5">{children}</h3>,
-                  p: ({ children }: any) => <p className="text-[11px] text-[#c9d1d9] leading-relaxed mb-1">{children}</p>,
+                  p: ({ children }: any) => (
+                    <p className="text-[11px] text-[#c9d1d9] leading-relaxed mb-1">
+                      {children}
+                      {isStreaming && <StreamingCursor />}
+                    </p>
+                  ),
                   ul: ({ children }: any) => <ul className="list-disc list-inside text-[11px] text-[#c9d1d9] space-y-px mb-1">{children}</ul>,
                   ol: ({ children }: any) => <ol className="list-decimal list-inside text-[11px] text-[#c9d1d9] space-y-px mb-1">{children}</ol>,
                   li: ({ children }: any) => <li className="text-[11px] text-[#c9d1d9]">{children}</li>,
                   blockquote: ({ children }: any) => (
-                    <blockquote className="border-l border-[#58a6ff] pl-2 py-px my-1 bg-[#0d1117] rounded-r">
+                    <blockquote className="border-l-2 border-[#58a6ff] pl-2 py-px my-1 bg-[#0d1117] rounded-r">
                       <p className="text-[11px] text-[#8b949e] italic">{children}</p>
                     </blockquote>
                   ),
@@ -242,10 +287,23 @@ export default function Message({ role, content, timestamp }: MessageProps) {
               >
                 {content}
               </ReactMarkdown>
+              
+              {/* Streaming indicator at end of message */}
+              {isStreaming && content.length > 0 && !content.endsWith('\n') && (
+                <StreamingCursor />
+              )}
             </div>
           )}
         </div>
-        <span className="text-[9px] text-[#484f58] mt-0.5 block">{timeStr}</span>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className="text-[9px] text-[#484f58]">{timeStr}</span>
+          {isStreaming && (
+            <span className="flex items-center gap-1 text-[9px] text-violet-400">
+              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+              typing
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

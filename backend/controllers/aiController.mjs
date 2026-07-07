@@ -1,143 +1,155 @@
 // backend/controllers/aiController.mjs
-import { generateCodeResponse, streamCodeResponse, parseAiResponse, applyEdits } from '../services/aiService.mjs';
+import { 
+  generateCodeResponse, 
+  streamCodeResponse, 
+  parseAiResponse,
+  applyEdits,
+} from '../services/aiService.mjs';
 
-export async function handleChat(req, res) {
-  try {
-    const { projectFiles, message, chatHistory, provider, preferredModel, activeFile } = req.body;
+export async function handleChat(options) {
+  const {
+    message,
+    projectFiles,
+    chatHistory,
+    provider,
+    preferredModel,
+    activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+  } = options;
 
-    console.log('=== handleChat DEBUG ===');
-    console.log('Received message:', message);
-    console.log('Provider:', provider || 'openrouter (default)');
-    console.log('Preferred model:', preferredModel || 'auto-rotate');
-    console.log('Active file:', activeFile || 'none');
-    console.log('Project files count:', Object.keys(projectFiles || {}).length);
-    console.log('Chat history length:', (chatHistory || []).length);
-    console.log('========================');
+  const response = await generateCodeResponse(projectFiles, message, {
+    chatHistory,
+    provider,
+    preferredModel,
+    activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+  });
 
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
-    }
+  const parsed = parseAiResponse(response);
 
-    const aiResponse = await generateCodeResponse(
-      projectFiles || {},
-      message,
-      chatHistory || [],
-      provider || 'openrouter',
-      activeFile || null
-    );
-
-    // Parse response for targeted edits
-    const { message: cleanMessage, edits } = parseAiResponse(aiResponse);
-    
-    // Apply edits if found
-    let updatedFiles = null;
-    let editSummary = null;
-    
-    if (edits.length > 0) {
-      const result = applyEdits(projectFiles || {}, edits);
-      updatedFiles = result.updatedFiles;
-      editSummary = {
-        applied: result.applied,
-        failed: result.failed,
-      };
-      console.log('✅ Applied edits:', result.applied);
-      if (result.failed.length > 0) {
-        console.warn('⚠️ Failed edits:', result.failed);
-      }
-    }
-
-    res.json({
-      success: true,
-      response: cleanMessage || aiResponse,
-      provider: provider || 'openrouter',
-      timestamp: new Date().toISOString(),
-      // Include edit info so frontend can apply changes
-      edits: editSummary,
-      updatedFiles: updatedFiles,
-    });
-  } catch (error) {
-    console.error('=== Chat Error FULL ===');
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    console.error('========================');
-    res.status(500).json({ error: error.message, stack: error.stack });
+  // Apply edits if any
+  let updatedFiles = null;
+  let appliedEdits = [];
+  let failedEdits = [];
+  
+  if (parsed.edits && parsed.edits.length > 0) {
+    const result = applyEdits(projectFiles, parsed.edits, { activeFile });
+    updatedFiles = result.updatedFiles;
+    appliedEdits = result.applied;
+    failedEdits = result.failed;
   }
+
+  return {
+    content: parsed.message,
+    provider: response.provider,
+    model: response.model,
+    mode: parsed.mode,
+    edits: {
+      applied: appliedEdits,
+      failed: failedEdits,
+    },
+    updatedFiles,
+  };
 }
 
-export async function handleStream(req, res) {
-  try {
-    const { projectFiles, message, chatHistory, provider, activeFile } = req.body;
+export async function handleStream(options) {
+  const {
+    message,
+    projectFiles,
+    chatHistory,
+    provider,
+    preferredModel,
+    activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+    onChunk,
+    onComplete,
+  } = options;
 
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
-    }
+  let fullText = '';
+  let metadata = {};
 
-    res.setHeader('Content-Type', 'text/plain');
-    res.setHeader('Transfer-Encoding', 'chunked');
+  const response = await streamCodeResponse(projectFiles, message, (chunk) => {
+    fullText += chunk;
+    if (onChunk) onChunk(chunk);
+  }, {
+    chatHistory,
+    provider,
+    preferredModel,
+    activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+  });
 
-    await streamCodeResponse(
-      projectFiles || {},
-      message,
-      chatHistory || [],
-      (chunk) => {
-        res.write(chunk);
-      },
-      provider || 'openrouter',
-      activeFile || null
-    );
+  const parsed = parseAiResponse(response);
+  
+  metadata = {
+    provider: response.provider,
+    model: response.model,
+    mode: parsed.mode,
+  };
 
-    res.end();
-  } catch (error) {
-    console.error('Stream Error:', error);
-    res.status(500).json({ error: error.message });
+  // Apply edits after stream completes
+  if (parsed.edits && parsed.edits.length > 0) {
+    const result = applyEdits(projectFiles, parsed.edits, { activeFile });
+    metadata.edits = result;
   }
+
+  if (onComplete) onComplete(metadata);
 }
 
-export async function handleAnalyze(req, res) {
-  try {
-    const { projectFiles, provider, activeFile } = req.body;
+export async function handleAnalyze(options) {
+  const { projectFiles, provider, preferredModel, activeFile } = options;
 
-    const response = await generateCodeResponse(
-      projectFiles || {},
-      'Analyze this code for errors, bugs, and potential improvements. Provide specific fixes.',
-      [],
-      provider || 'openrouter',
-      activeFile || null
-    );
+  // Force review mode by prepending instruction
+  const reviewMessage = 'Please review this codebase for bugs, security issues, performance problems, and maintainability concerns. Be thorough and specific.';
 
-    res.json({
-      success: true,
-      response,
-      provider: provider || 'openrouter',
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error('Analyze Error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  const response = await generateCodeResponse(projectFiles, reviewMessage, {
+    provider,
+    preferredModel,
+    activeFile,
+  });
+
+  const parsed = parseAiResponse(response);
+
+  return {
+    content: parsed.message,
+    provider: response.provider,
+    model: response.model,
+    edits: parsed.edits || [],
+  };
 }
 
-export async function handleExplain(req, res) {
-  try {
-    const { projectFiles, filename, provider, activeFile } = req.body;
+export async function handleExplain(options) {
+  const { projectFiles, filename, provider, preferredModel, activeFile } = options;
 
-    const response = await generateCodeResponse(
-      projectFiles || {},
-      `Explain the code in ${filename || 'all files'} in detail. Break down the logic and structure.`,
-      [],
-      provider || 'openrouter',
-      activeFile || null
-    );
+  const explainMessage = `Please explain the code in file "${filename}". Break down what it does, key functions, and any important patterns or decisions.`;
 
-    res.json({
-      success: true,
-      response,
-      provider: provider || 'openrouter',
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error('Explain Error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  const response = await generateCodeResponse(projectFiles, explainMessage, {
+    provider,
+    preferredModel,
+    activeFile,
+  });
+
+  const parsed = parseAiResponse(response);
+
+  return {
+    content: parsed.message,
+    provider: response.provider,
+    model: response.model,
+  };
 }
