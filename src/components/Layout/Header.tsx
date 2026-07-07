@@ -45,7 +45,6 @@ export default function Header() {
     activeFile,
   } = useWorkspaceStore();
 
-  // Close menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -91,7 +90,6 @@ export default function Header() {
     );
   };
 
-  // Handle file upload from file manager
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = event.target.files;
     if (!uploadedFiles || uploadedFiles.length === 0) return;
@@ -133,14 +131,14 @@ export default function Header() {
             openFile(firstFile);
           }
 
-          showToast(`✅ Imported ${importedCount} files`, 'success');
+          showToast(` Imported ${importedCount} files`, 'success');
         }
       };
       reader.onerror = () => {
         console.error(`Failed to read ${file.name}`);
         importedCount++;
         if (importedCount === totalFiles) {
-          showToast(`⚠️ Some files failed to import`, 'error');
+          showToast(` Some files failed to import`, 'error');
         }
       };
 
@@ -152,7 +150,6 @@ export default function Header() {
     });
   };
 
-  // Handle folder upload
   const handleFolderUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = event.target.files;
     if (!uploadedFiles || uploadedFiles.length === 0) return;
@@ -162,7 +159,6 @@ export default function Header() {
     const totalFiles = uploadedFiles.length;
 
     Array.from(uploadedFiles).forEach((file) => {
-      // Get the relative path - use type assertion for webkitRelativePath
       const relativePath = (file as any).webkitRelativePath || file.name;
       const fileName = relativePath;
 
@@ -170,13 +166,11 @@ export default function Header() {
       reader.onload = (e) => {
         const content = e.target?.result as string;
         
-        // Check if file already exists - use Object.keys to check
         const fileExists = Object.keys(files).some(key => key === fileName);
         if (!fileExists) {
           fileList[fileName] = content;
           importedCount++;
         } else {
-          // If file exists, add with a suffix
           const baseName = fileName.replace(/\.[^.]+$/, '');
           const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
           let newName = fileName;
@@ -199,14 +193,14 @@ export default function Header() {
             openFile(firstFile);
           }
           
-          showToast(`✅ Imported ${importedCount} files from folder`, 'success');
+          showToast(`Imported ${importedCount} files from folder`, 'success');
         }
       };
       reader.onerror = () => {
         console.error(`Failed to read ${file.name}`);
         importedCount++;
         if (importedCount === totalFiles) {
-          showToast(`⚠️ Some files failed to import`, 'error');
+          showToast(` Some files failed to import`, 'error');
         }
       };
       if (isTextFile(file)) {
@@ -226,13 +220,13 @@ export default function Header() {
     }
     updateFile(filename, '<!-- New file -->');
     openFile(filename);
-    showToast(`✅ "${filename}" created`, 'success');
+    showToast(` "${filename}" created`, 'success');
     setMobileMenuOpen(false);
   };
 
   const handleDeleteFile = () => {
     if (Object.keys(files).length <= 1) {
-      showToast('❌ Cannot delete the last file', 'error');
+      showToast(' Cannot delete the last file', 'error');
       return;
     }
     if (!window.confirm(`Delete "${activeFile}"?`)) {
@@ -246,19 +240,13 @@ export default function Header() {
 
   const handleSave = () => {
     window.dispatchEvent(new CustomEvent('save-files'));
-    showToast('✅ All files saved', 'success');
-    setMobileMenuOpen(false);
-  };
-
-  const handleFormat = () => {
-    window.dispatchEvent(new CustomEvent('format-code'));
-    showToast(`✅ Formatted "${activeFile}"`, 'success');
+    showToast(' All files saved', 'success');
     setMobileMenuOpen(false);
   };
 
   const handleDownloadFile = () => {
     if (!activeFile || !files[activeFile]) {
-      showToast('❌ No file to download', 'error');
+      showToast(' No file to download', 'error');
       return;
     }
     const content = files[activeFile];
@@ -275,14 +263,12 @@ export default function Header() {
     setMobileMenuOpen(false);
   };
 
-  // Open file manager for file selection
   const handleOpenFiles = () => {
     if (fileInputRef.current) {
       fileInputRef.current.click();
     }
   };
 
-  // Open file manager for folder selection
   const handleOpenFolder = () => {
     if (folderInputRef.current) {
       folderInputRef.current.click();
@@ -293,7 +279,6 @@ export default function Header() {
     <>
       <header className="h-11 bg-[#0f1322] border-b border-[#1e293b] flex items-center justify-between px-3 shrink-0 z-50">
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          {/* Logo */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <div className="w-7 h-7 rounded-md bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-900/20">
               <Sparkles className="w-4 h-4 text-white" />
@@ -306,9 +291,7 @@ export default function Header() {
             </span>
           </div>
 
-          {/* Desktop buttons */}
           <div className="hidden md:flex flex-wrap items-center gap-1 flex-1 min-w-0">
-            {/* Actions Section */}
             <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[#1a2035] rounded-md flex-wrap">
               <button 
                 onClick={handleNewFile}
@@ -338,15 +321,6 @@ export default function Header() {
               </button>
               <div className="w-px h-4 bg-[#30363d]" />
               <button 
-                onClick={handleFormat} 
-                className="flex items-center gap-1 px-2 py-1 text-[10px] text-slate-300 hover:text-white hover:bg-slate-700/50 rounded transition whitespace-nowrap"
-                title="Format Code"
-              >
-                <FileCode className="w-3.5 h-3.5" />
-                <span className="hidden xl:inline">Format</span>
-              </button>
-              <div className="w-px h-4 bg-[#30363d]" />
-              <button 
                 onClick={() => {
                   setShowShareModal(true);
                   setMobileMenuOpen(false);
@@ -359,7 +333,6 @@ export default function Header() {
               </button>
             </div>
 
-            {/* Project Section */}
             <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[#1a2035] rounded-md ml-1 flex-wrap">
               <button 
                 onClick={handleOpenFiles}
@@ -391,9 +364,7 @@ export default function Header() {
           </div>
         </div>
 
-        {/* Right side controls */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          {/* Device preview toggles */}
           <div className="flex items-center bg-[#1a2035] rounded-lg p-0.5">
             <button
               onClick={() => setPreviewDevice('desktop')}
@@ -420,7 +391,6 @@ export default function Header() {
 
           <div className="h-5 w-px bg-[#1e293b]" />
 
-          {/* AI Assistant toggle */}
           <button
             onClick={toggleAiPanel}
             className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-md transition ${aiPanelVisible ? 'bg-violet-500/15 text-violet-400 border border-violet-500/20' : 'text-slate-400 hover:text-white hover:bg-slate-800 border border-transparent'}`}
@@ -429,7 +399,6 @@ export default function Header() {
             <span className="hidden md:inline">AI Assistant</span>
           </button>
 
-          {/* Mobile menu */}
           <div className="md:hidden relative" ref={menuRef}>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -465,13 +434,6 @@ export default function Header() {
                 >
                   <Save className="w-4 h-4 text-blue-400" />
                   <span>Save All</span>
-                </button>
-                <button
-                  onClick={handleFormat}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[11px] text-slate-300 hover:bg-[#21262d] transition"
-                >
-                  <FileCode className="w-4 h-4 text-yellow-400" />
-                  <span>Format Code</span>
                 </button>
                 <button
                   onClick={() => {
@@ -514,8 +476,7 @@ export default function Header() {
           </div>
         </div>
 
-        {/* Hidden file inputs */}
-          <input
+        <input
           ref={fileInputRef}
           type="file"
           multiple
@@ -527,14 +488,12 @@ export default function Header() {
           ref={folderInputRef}
           type="file"
           multiple
-          // @ts-ignore - webkitdirectory is a valid attribute for folder upload
           webkitdirectory=""
           className="hidden"
           onChange={handleFolderUpload}
         />
       </header>
 
-      {/* Share Modal */}
       <ShareModal 
         isOpen={showShareModal} 
         onClose={() => setShowShareModal(false)}
