@@ -1,3 +1,4 @@
+// backend/routes/uploadRoutes.mjs
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
@@ -21,7 +22,10 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { 
+    fileSize: 50 * 1024 * 1024,
+    files: 100000
+  },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
       'text/html',
@@ -42,6 +46,6 @@ const upload = multer({
 
 router.post('/file', upload.single('file'), uploadFile);
 router.post('/zip', upload.single('zip'), uploadZip);
-router.post('/folder', upload.array('files', 100), uploadFolder);
+router.post('/folder', upload.array('files', 0), uploadFolder);
 
 export default router;

@@ -94,28 +94,20 @@ async function fetchWithError(url: string, options: FetchOptions = {}): Promise<
 
 // ─── INDEXEDDB HELPERS ─────────────────────────────────────────────
 
-/**
- * Fetches file contents from IndexedDB (with Zustand fallback) for all files in the store.
- * Use this before sending files to the AI backend.
- */
 export async function buildProjectFilesFromStore(): Promise<Record<string, string>> {
   const { files } = useWorkspaceStore.getState();
   const filePaths = Object.keys(files);
   const result: Record<string, string> = {};
 
-  // For small projects (< 1000 files), fetch all from IndexedDB
-  // For large projects, we might want to be selective, but for now fetch all
   const batchSize = 100;
   for (let i = 0; i < filePaths.length; i += batchSize) {
     const batch = filePaths.slice(i, i + batchSize);
     const contents = await Promise.all(
       batch.map(async (path) => {
-        // Check Zustand first (newly created files, small files)
         const zustandContent = (files as Record<string, string>)[path];
         if (zustandContent !== undefined && zustandContent !== '') {
           return { path, content: zustandContent };
         }
-        // Fallback to IndexedDB
         const dbContent = await getContent(path);
         return { path, content: dbContent || '' };
       })
@@ -125,7 +117,6 @@ export async function buildProjectFilesFromStore(): Promise<Record<string, strin
       result[path] = content;
     }
 
-    // Yield to UI every batch
     if (i + batchSize < filePaths.length) {
       await new Promise(r => setTimeout(r, 0));
     }
@@ -134,9 +125,6 @@ export async function buildProjectFilesFromStore(): Promise<Record<string, strin
   return result;
 }
 
-/**
- * Fetches content for a specific file from IndexedDB or Zustand.
- */
 export async function getFileContentAsync(path: string): Promise<string> {
   const { files } = useWorkspaceStore.getState();
   const zustandContent = (files as Record<string, string>)[path];
@@ -173,10 +161,6 @@ export async function sendChatMessage(
   return response as unknown as ChatApiResponse;
 }
 
-/**
- * Convenience wrapper: fetches file contents from IndexedDB then sends to AI.
- * Use this instead of sendChatMessage() when working with large projects.
- */
 export async function sendChatMessageWithStore(
   message: string,
   chatHistory: ChatMessage[] = [],
@@ -199,9 +183,6 @@ export async function analyzeCode(
   });
 }
 
-/**
- * Convenience wrapper: fetches file contents from IndexedDB then analyzes.
- */
 export async function analyzeCodeWithStore(
   provider: AiProvider = 'openrouter',
   activeFile?: string | null
@@ -222,9 +203,6 @@ export async function explainCode(
   });
 }
 
-/**
- * Convenience wrapper: fetches file contents from IndexedDB then explains.
- */
 export async function explainCodeWithStore(
   filename: string,
   provider: AiProvider = 'openrouter',
@@ -319,4 +297,31 @@ export async function uploadZip(file: File): Promise<ApiResponse> {
     throw new Error('ZIP upload failed');
   }
   return response.json();
+}
+
+//  NEW FUNCTION: Upload entire folder with all files
+export async function uploadLargeFolder(files: File[]): Promise<ApiResponse> {
+  const formData = new FormData();
+  
+  console.log(`📁 Preparing to upload ${files.length} files...`);
+  
+  // Append all files to FormData
+  files.forEach((file) => {
+    formData.append('files', file);
+  });
+
+  const response = await fetch(`${API_BASE_URL}/upload/folder`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Folder upload failed');
+  }
+  
+  const result = await response.json();
+  console.log(`Upload complete: ${result.count || result.files?.length || 0} files`);
+  
+  return result;
 }

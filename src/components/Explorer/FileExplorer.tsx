@@ -569,62 +569,192 @@ export default function FileExplorer() {
     });
   }, []);
 
+  // FIXED: Uses Zustand for large uploads (1000+ files)
   const handleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
 
-    setImporting(true);
-    setImportProgress({ current: 0, total: fileList.length });
+    const fileArray = Array.from(fileList);
+    const totalFiles = fileArray.length;
+    
+    console.log(`[Upload] Selected ${totalFiles} files for upload`);
+    
+    // Use Zustand for large uploads (1000+ files)
+    const useZustandStorage = totalFiles >= 1000;
+    console.log(`[Upload] Using ${useZustandStorage ? 'Zustand' : 'IndexedDB'} storage for ${totalFiles} files`);
 
-    const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'ico', 'bmp']);
-    const textExts = new Set(['html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'json', 'md', 'txt', 'xml', 'yaml', 'yml']);
-
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      const path = file.webkitRelativePath || file.name;
-      const ext = path.split('.').pop()?.toLowerCase() || '';
-
-      let type: 'text' | 'image' | 'binary' = 'binary';
-      if (textExts.has(ext)) type = 'text';
-      else if (imageExts.has(ext)) type = 'image';
-
-      // Add to Zustand store (metadata only — content stays in IndexedDB)
-      updateFile(path, '');
-
-      // Track folders
-      const parts = path.split('/');
-      let folderPath = '';
-      for (let j = 0; j < parts.length - 1; j++) {
-        folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
-        if (!folders.includes(folderPath)) {
-          createFolder(folderPath);
-        }
-      }
-
-      // Save content to IndexedDB
-      if (type === 'image') {
-        await saveBlob(path, file);
-      } else {
-        const content = await file.text();
-        await saveContent(path, content);
-        // Also keep in Zustand for small files, but for large imports we skip this
-        if (fileList.length < 1000) {
-          updateFile(path, content);
-        }
-      }
-
-      setImportProgress({ current: i + 1, total: fileList.length });
-
-      // Yield to UI every 50 files
-      if (i % 50 === 0) {
-        await new Promise(r => setTimeout(r, 0));
+    // Show warning for large uploads
+    if (totalFiles > 1000) {
+      const confirmUpload = window.confirm(
+        `WARNING: You are about to upload ${totalFiles.toLocaleString()} files.\n\n` +
+        `This may take a long time and could use a lot of memory.\n\n` +
+        `Are you sure you want to continue?`
+      );
+      if (!confirmUpload) {
+        e.target.value = '';
+        return;
       }
     }
 
-    showToast(`Imported ${fileList.length} files`, 'success');
-    setImporting(false);
-    setImportProgress({ current: 0, total: 0 });
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    setImporting(true);
+    setImportProgress({ current: 0, total: totalFiles });
+
+    try {
+      // Use FormData to send to backend
+      const formData = new FormData();
+      
+      console.log('[Upload] Building FormData...');
+      
+      // Add all files to FormData with their relative paths
+      for (let i = 0; i < fileArray.length; i++) {
+        const file = fileArray[i];
+        const path = (file as any).webkitRelativePath || file.name;
+        formData.append('files', file, path);
+        
+        if (i % 100 === 0) {
+          setImportProgress({ current: i + 1, total: totalFiles });
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+
+      console.log(`[Upload] Sending ${totalFiles} files to backend API...`);
+
+      // Send to backend API
+      const response = await fetch('http://localhost:5002/api/upload/folder', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = 'Upload failed';
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.error || errorMessage;
+        } catch {
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      const result = await response.json();
+      console.log('[Upload] Backend response:', result);
+
+      // Process the returned files
+      if (result.success && result.files) {
+        let savedCount = 0;
+        const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'ico', 'bmp']);
+        
+        console.log(`[Upload] Saving ${result.files.length} files to ${useZustandStorage ? 'Zustand' : 'IndexedDB'}...`);
+
+        if (useZustandStorage) {
+          // ZUSTAND STORAGE - For large file uploads (1000+ files)
+          const zustandFiles: Record<string, string> = {};
+          const folderPaths = new Set<string>();
+          
+          for (const fileData of result.files) {
+            const path = fileData.filename;
+            
+            // Track folders
+            const parts = path.split('/');
+            let folderPath = '';
+            for (let j = 0; j < parts.length - 1; j++) {
+              folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
+              folderPaths.add(folderPath);
+            }
+            
+            // Store file content in Zustand
+            if (fileData.content) {
+              zustandFiles[path] = fileData.content;
+            } else {
+              zustandFiles[path] = '';
+            }
+            
+            savedCount++;
+            if (savedCount % 100 === 0) {
+              setImportProgress({ current: savedCount, total: totalFiles });
+              await new Promise(r => setTimeout(r, 0));
+            }
+          }
+          
+          // Update Zustand store in batch
+          const currentFiles = useWorkspaceStore.getState().files;
+          const currentFolders = useWorkspaceStore.getState().folders;
+          
+          // Merge files
+          const mergedFiles = { ...currentFiles };
+          for (const [path, content] of Object.entries(zustandFiles)) {
+            mergedFiles[path] = content;
+          }
+          
+          // Merge folders
+          const mergedFolders = [...currentFolders];
+          for (const folder of folderPaths) {
+            if (!mergedFolders.includes(folder)) {
+              mergedFolders.push(folder);
+            }
+          }
+          
+          // Batch update Zustand store
+          useWorkspaceStore.setState({
+            files: mergedFiles,
+            folders: mergedFolders,
+          });
+          
+          console.log(`[Upload] Added ${Object.keys(zustandFiles).length} files to Zustand store`);
+          console.log(`[Upload] Added ${folderPaths.size} folders to Zustand store`);
+          
+        } else {
+          // INDEXEDDB STORAGE - For small file uploads (< 1000 files)
+          for (const fileData of result.files) {
+            const path = fileData.filename;
+            const ext = path.split('.').pop()?.toLowerCase() || '';
+            const isImage = imageExts.has(ext);
+            
+            // Track folders
+            const parts = path.split('/');
+            let folderPath = '';
+            for (let j = 0; j < parts.length - 1; j++) {
+              folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
+              if (!folders.includes(folderPath)) {
+                createFolder(folderPath);
+              }
+            }
+            
+            // Save to IndexedDB
+            if (isImage) {
+              const originalFile = fileArray.find(f => {
+                const fPath = (f as any).webkitRelativePath || f.name;
+                return fPath === path;
+              });
+              if (originalFile) {
+                await saveBlob(path, originalFile);
+              }
+            } else if (fileData.content) {
+              await saveContent(path, fileData.content);
+              updateFile(path, fileData.content);
+            }
+            
+            savedCount++;
+            if (savedCount % 50 === 0) {
+              setImportProgress({ current: savedCount, total: totalFiles });
+              await new Promise(r => setTimeout(r, 0));
+            }
+          }
+        }
+        
+        showToast(`Successfully uploaded ${result.count || result.files.length} files`, 'success');
+      } else {
+        throw new Error('Upload failed: Invalid response from server');
+      }
+    } catch (error) {
+      console.error('[Upload] Failed:', error);
+      showToast(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    } finally {
+      setImporting(false);
+      setImportProgress({ current: 0, total: 0 });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   }, [folders, createFolder, updateFile, showToast]);
 
   const toggleSettings = useCallback(() => window.dispatchEvent(new CustomEvent('toggle-settings')), []);

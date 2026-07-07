@@ -1,3 +1,4 @@
+// backend/controllers/uploadController.mjs
 import fs from 'fs';
 import path from 'path';
 import AdmZip from 'adm-zip';
@@ -51,6 +52,8 @@ export async function uploadFolder(req, res) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
+    console.log(`[Upload] Uploading ${req.files.length} files...`);
+    
     const files = req.files.map((file) => {
       const fileData = {
         filename: file.originalname,
@@ -60,14 +63,26 @@ export async function uploadFolder(req, res) {
       };
 
       if (file.mimetype.startsWith('text/') || file.mimetype === 'application/javascript') {
-        fileData.content = fs.readFileSync(file.path, 'utf-8');
+        try {
+          fileData.content = fs.readFileSync(file.path, 'utf-8');
+        } catch (err) {
+          fileData.content = null;
+        }
       }
 
       return fileData;
     });
 
-    res.json({ success: true, files, count: files.length });
+    console.log(`[Upload] Uploaded ${files.length} files`);
+
+    res.json({ 
+      success: true, 
+      files, 
+      count: files.length,
+      message: `Successfully uploaded ${files.length} files`
+    });
   } catch (error) {
+    console.error('[Upload] Error:', error);
     res.status(500).json({ error: error.message });
   }
 }
