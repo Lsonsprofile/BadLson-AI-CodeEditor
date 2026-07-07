@@ -16,6 +16,11 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface CursorPosition {
+  line: number;
+  column: number;
+}
+
 export interface AiModelsResponse {
   success: boolean;
   data: {
@@ -41,14 +46,21 @@ export interface EditSummary {
   type: 'created' | 'replaced' | 'appended' | 'unchanged';
 }
 
+export interface FailedEdit {
+  filename: string;
+  reason: string;
+}
+
 export interface ChatApiResponse {
   success: boolean;
   response: string;
   provider: string;
+  model?: string;
+  mode?: string;
   timestamp: string;
   edits?: {
     applied: EditSummary[];
-    failed: Array<{ filename: string; reason: string }>;
+    failed: FailedEdit[];
   };
   updatedFiles?: Record<string, string>;
 }
@@ -92,6 +104,33 @@ async function fetchWithError(url: string, options: FetchOptions = {}): Promise<
   }
 }
 
+// ─── ERROR CAPTURE HELPERS ───────────────────────────────────────────
+
+/**
+ * Captures recent console errors from the preview iframe or window.
+ * Call this before sending a message to include error context.
+ */
+export function getRecentConsoleErrors(maxErrors: number = 10): string[] {
+  const errors = (window as any).__consoleErrors || [];
+  return errors.slice(-maxErrors);
+}
+
+/**
+ * Captures recent build/compilation errors.
+ */
+export function getRecentBuildErrors(maxErrors: number = 5): string[] {
+  const errors = (window as any).__buildErrors || [];
+  return errors.slice(-maxErrors);
+}
+
+/**
+ * Clears captured errors. Call after successful AI response.
+ */
+export function clearCapturedErrors(): void {
+  (window as any).__consoleErrors = [];
+  (window as any).__buildErrors = [];
+}
+
 // ─── INDEXEDDB HELPERS ─────────────────────────────────────────────
 
 /**
@@ -104,7 +143,6 @@ export async function buildProjectFilesFromStore(): Promise<Record<string, strin
   const result: Record<string, string> = {};
 
   // For small projects (< 1000 files), fetch all from IndexedDB
-  // For large projects, we might want to be selective, but for now fetch all
   const batchSize = 100;
   for (let i = 0; i < filePaths.length; i += batchSize) {
     const batch = filePaths.slice(i, i + batchSize);
@@ -150,23 +188,49 @@ export async function getFileContentAsync(path: string): Promise<string> {
 
 export type AiProvider = 'gemini' | 'groq' | 'openrouter';
 
-export async function sendChatMessage(
-  projectFiles: Record<string, string>,
-  message: string,
-  chatHistory: ChatMessage[] = [],
-  provider: AiProvider = 'openrouter',
-  preferredModel?: string | null,
-  activeFile?: string | null
-): Promise<ChatApiResponse> {
+export interface SendChatOptions {
+  projectFiles: Record<string, string>;
+  message: string;
+  chatHistory?: ChatMessage[];
+  provider?: AiProvider;
+  preferredModel?: string | null;
+  activeFile?: string | null;
+  recentFiles?: string[];
+  consoleErrors?: string[];
+  buildErrors?: string[];
+  selectedCode?: string | null;
+  cursorPosition?: CursorPosition | null;
+}
+
+export async function sendChatMessage(options: SendChatOptions): Promise<ChatApiResponse> {
+  const {
+    projectFiles,
+    message,
+    chatHistory = [],
+    provider = 'openrouter',
+    preferredModel = null,
+    activeFile = null,
+    recentFiles = [],
+    consoleErrors = [],
+    buildErrors = [],
+    selectedCode = null,
+    cursorPosition = null,
+  } = options;
+
   const response = await fetchWithError(`${API_BASE_URL}/ai/chat`, {
     method: 'POST',
-    body: JSON.stringify({ 
-      projectFiles, 
-      message, 
-      chatHistory, 
+    body: JSON.stringify({
+      projectFiles,
+      message,
+      chatHistory,
       provider,
       preferredModel,
       activeFile,
+      recentFiles,
+      consoleErrors,
+      buildErrors,
+      selectedCode,
+      cursorPosition,
     }),
   });
 
@@ -175,6 +239,7 @@ export async function sendChatMessage(
 
 /**
  * Convenience wrapper: fetches file contents from IndexedDB then sends to AI.
+ * Automatically captures console/build errors and editor context.
  * Use this instead of sendChatMessage() when working with large projects.
  */
 export async function sendChatMessageWithStore(
@@ -182,10 +247,33 @@ export async function sendChatMessageWithStore(
   chatHistory: ChatMessage[] = [],
   provider: AiProvider = 'openrouter',
   preferredModel?: string | null,
-  activeFile?: string | null
+  activeFile?: string | null,
+  selectedCode?: string | null,
+  cursorPosition?: CursorPosition | null
 ): Promise<ChatApiResponse> {
   const projectFiles = await buildProjectFilesFromStore();
-  return sendChatMessage(projectFiles, message, chatHistory, provider, preferredModel, activeFile);
+  
+  // Auto-capture recent errors
+  const consoleErrors = getRecentConsoleErrors();
+  const buildErrors = getRecentBuildErrors();
+  
+  // Get recent files from open tabs
+  const state = useWorkspaceStore.getState();
+  const recentFiles = state.openFiles.slice(-5);
+
+  return sendChatMessage({
+    projectFiles,
+    message,
+    chatHistory,
+    provider,
+    preferredModel,
+    activeFile: activeFile || state.activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+  });
 }
 
 export async function analyzeCode(
@@ -237,6 +325,135 @@ export async function explainCodeWithStore(
 export async function getAiModels(): Promise<AiModelsResponse> {
   const res = await fetchWithError(`${API_BASE_URL}/ai/models`);
   return res as unknown as AiModelsResponse;
+}
+
+// ─── STREAMING API ──────────────────────────────────────────────────
+
+export interface StreamCallbacks {
+  onChunk: (chunk: string) => void;
+  onDone?: (metadata: { provider: string; model: string; mode?: string }) => void;
+  onError?: (error: string) => void;
+}
+
+export async function streamChatMessage(
+  options: SendChatOptions,
+  callbacks: StreamCallbacks
+): Promise<void> {
+  const {
+    projectFiles,
+    message,
+    chatHistory = [],
+    provider = 'openrouter',
+    preferredModel = null,
+    activeFile = null,
+    recentFiles = [],
+    consoleErrors = [],
+    buildErrors = [],
+    selectedCode = null,
+    cursorPosition = null,
+  } = options;
+
+  const response = await fetch(`${API_BASE_URL}/ai/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectFiles,
+      message,
+      chatHistory,
+      provider,
+      preferredModel,
+      activeFile,
+      recentFiles,
+      consoleErrors,
+      buildErrors,
+      selectedCode,
+      cursorPosition,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Stream request failed: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        if (!line.startsWith('data: ')) continue;
+
+        const dataStr = line.slice(6).trim();
+        if (dataStr === '[DONE]') continue;
+
+        try {
+          const data = JSON.parse(dataStr);
+          if (data.type === 'chunk' && data.content) {
+            callbacks.onChunk(data.content);
+          } else if (data.type === 'done' && callbacks.onDone) {
+            callbacks.onDone({
+              provider: data.provider || provider,
+              model: data.model || 'unknown',
+              mode: data.mode,
+            });
+          } else if (data.type === 'error' && callbacks.onError) {
+            callbacks.onError(data.error || 'Unknown stream error');
+          }
+        } catch {
+          // Skip malformed SSE data
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * Streaming wrapper with auto file fetch and error capture.
+ */
+export async function streamChatMessageWithStore(
+  message: string,
+  callbacks: StreamCallbacks,
+  chatHistory: ChatMessage[] = [],
+  provider: AiProvider = 'openrouter',
+  preferredModel?: string | null,
+  activeFile?: string | null,
+  selectedCode?: string | null,
+  cursorPosition?: CursorPosition | null
+): Promise<void> {
+  const projectFiles = await buildProjectFilesFromStore();
+  
+  const consoleErrors = getRecentConsoleErrors();
+  const buildErrors = getRecentBuildErrors();
+  
+  const state = useWorkspaceStore.getState();
+  const recentFiles = state.openFiles.slice(-5);
+
+  return streamChatMessage({
+    projectFiles,
+    message,
+    chatHistory,
+    provider,
+    preferredModel,
+    activeFile: activeFile || state.activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+  }, callbacks);
 }
 
 // ─── PROJECT API ────────────────────────────────────────────────────

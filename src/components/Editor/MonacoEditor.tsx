@@ -43,6 +43,25 @@ export default function MonacoEditorComponent() {
   const handleEditorDidMount = useCallback((editor: MonacoEditorType.IStandaloneCodeEditor) => {
     editorRef.current = editor;
 
+    // ─── AI CONTEXT: Capture selection & cursor ─────────────────────
+    editor.onDidChangeCursorSelection((e) => {
+      const model = editor.getModel();
+      if (!model) return;
+
+      const selection = model.getValueInRange(e.selection);
+      (window as any).__selectedEditorText = selection || null;
+      (window as any).__editorCursor = {
+        line: e.selection.startLineNumber,
+        column: e.selection.startColumn,
+      };
+    });
+
+    // Clear selection on blur to avoid stale context
+    editor.onDidBlurEditorWidget(() => {
+      (window as any).__selectedEditorText = null;
+    });
+
+    // ─── Keyboard shortcuts ───────────────────────────────────────────
     editor.addCommand(
       (window as any).monaco?.KeyMod?.CtrlCmd | (window as any).monaco?.KeyCode?.KeyS || 49,
       () => {
