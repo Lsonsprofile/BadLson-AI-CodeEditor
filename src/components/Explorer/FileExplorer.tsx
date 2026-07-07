@@ -150,6 +150,8 @@ function getVisibleNodes(nodes: TreeNode[], openFolders: Set<string>, result: Tr
   return result;
 }
 
+// ─── FIXED: TreeItem with working checkmark ────────────────────────
+
 const TreeItem = ({
   node,
   isActive,
@@ -159,6 +161,7 @@ const TreeItem = ({
   onSelect,
   onDelete,
   onContextMenu,
+  onToggleSelect,
   style,
 }: {
   node: TreeNode;
@@ -169,6 +172,7 @@ const TreeItem = ({
   onSelect: (path: string) => void;
   onDelete: (node: TreeNode) => void;
   onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
+  onToggleSelect: (name: string) => void;
   style: React.CSSProperties;
 }) => {
   const isFolder = node.type === 'folder';
@@ -181,8 +185,9 @@ const TreeItem = ({
           onContextMenu={(e) => onContextMenu(e, node)}
           className="group flex items-center gap-1.5 w-full px-2 py-0.5 text-[11px] rounded-sm transition-colors cursor-pointer select-none text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]"
         >
+          {/* ✅ FIXED: Checkmark now toggles selection */}
           <button
-            onClick={(e) => { e.stopPropagation(); }}
+            onClick={(e) => { e.stopPropagation(); onToggleSelect(node.name); }}
             className="shrink-0 text-[#8b949e] hover:text-[#c9d1d9]"
           >
             {isSelected ? <CheckSquare className="w-3 h-3 text-[#58a6ff]" /> : <Square className="w-3 h-3" />}
@@ -218,7 +223,8 @@ const TreeItem = ({
               : 'text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]'
           }`}
         >
-          <button onClick={(e) => { e.stopPropagation(); }} className="shrink-0">
+          {/* ✅ FIXED: Checkmark now toggles selection */}
+          <button onClick={(e) => { e.stopPropagation(); onToggleSelect(node.name); }} className="shrink-0">
             {isSelected ? <CheckSquare className="w-3 h-3 text-[#58a6ff]" /> : <Square className="w-3 h-3" />}
           </button>
 
@@ -569,7 +575,6 @@ export default function FileExplorer() {
     });
   }, []);
 
-  // FIXED: Uses Zustand for large uploads (1000+ files)
   const handleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
@@ -981,6 +986,7 @@ export default function FileExplorer() {
                   onSelect={openFile}
                   onDelete={handleDelete}
                   onContextMenu={handleContextMenu}
+                  onToggleSelect={toggleSelect}
                   style={{ height: ITEM_HEIGHT, top: (startIndex + idx) * ITEM_HEIGHT }}
                 />
               ))}
