@@ -1,78 +1,122 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import EditorTabs from '../Editor/EditorTabs';
 import MonacoEditorComponent from '../Editor/MonacoEditor';
 import LivePreview from '../Preview/LivePreview';
+import { getFileLanguage } from '../../utils/formatter';
+
+const MIN_EDITOR_HEIGHT = 20;
+const MAX_EDITOR_HEIGHT = 80;
+const MIN_EDITOR_PANEL_HEIGHT = 120;
 
 export default function Workspace() {
-  const { sidebarVisible, activeFile } = useWorkspaceStore();
-  const [editorHeight, setEditorHeight] = useState(20);
+  const { activeFile } = useWorkspaceStore();
+
+  const workspaceRef = useRef<HTMLDivElement>(null);
+
+  const [editorHeight, setEditorHeight] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
 
-  const handleMouseDown = useCallback(() => {
+  const language = useMemo(() => {
+    if (!activeFile) return 'Plain Text';
+
+    try {
+      return getFileLanguage(activeFile);
+    } catch {
+      return 'Plain Text';
+    }
+  }, [activeFile]);
+
+  const handlePointerDown = useCallback(() => {
     setIsDragging(true);
   }, []);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
-      const container = document.getElementById('workspace-main');
+    if (!isDragging) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const container = workspaceRef.current;
+
       if (!container) return;
+
       const rect = container.getBoundingClientRect();
-      const percentage = ((e.clientY - rect.top) / rect.height) * 100;
-      setEditorHeight(Math.max(20, Math.min(80, percentage)));
+
+      if (rect.height <= 0) return;
+
+      const percentage =
+        ((event.clientY - rect.top) / rect.height) * 100;
+
+      const clampedPercentage = Math.min(
+        MAX_EDITOR_HEIGHT,
+        Math.max(MIN_EDITOR_HEIGHT, percentage)
+      );
+
+      setEditorHeight(clampedPercentage);
     };
 
-    const handleMouseUp = () => {
+    const handlePointerUp = () => {
       setIsDragging(false);
     };
 
-    if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'row-resize';
-      document.body.style.userSelect = 'none';
-    }
+    document.addEventListener('pointermove', handlePointerMove);
+    document.addEventListener('pointerup', handlePointerUp);
+
+    document.body.classList.add('resizing');
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
+
+      document.body.classList.remove('resizing');
     };
   }, [isDragging]);
 
   return (
-    <div id="workspace-main" className="flex-1 flex flex-col min-h-0 overflow-hidden">
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+    <div
+      id="workspace-main"
+      ref={workspaceRef}
+      className="flex flex-1 flex-col min-h-0 overflow-hidden"
+    >
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <EditorTabs />
 
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex flex-1 flex-col min-h-0">
           <div
-            className="flex-none flex flex-col overflow-hidden min-h-[120px]"
-            style={{ flexBasis: `${editorHeight}%` }}
+            className="flex-none flex flex-col overflow-hidden"
+            style={{
+              flexBasis: `${editorHeight}%`,
+              minHeight: `${MIN_EDITOR_PANEL_HEIGHT}px`,
+            }}
           >
             <div className="panel-header">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-semibold text-slate-300">{activeFile}</span>
-                <span className="text-[9px] text-slate-600 code-font">
-                  {activeFile.endsWith('.html') && 'HTML'}
-                  {activeFile.endsWith('.css') && 'CSS'}
-                  {activeFile.endsWith('.js') && 'JavaScript'}
+                <span className="text-[10px] font-semibold text-slate-300">
+                  {activeFile || 'Untitled'}
+                </span>
+
+                <span className="code-font text-[9px] text-slate-500">
+                  {language}
                 </span>
               </div>
-              <span className="text-[9px] text-slate-600">Editing</span>
+
+              <span className="text-[9px] text-slate-600">
+                Editing
+              </span>
             </div>
 
             <MonacoEditorComponent />
           </div>
 
           <div
-            onMouseDown={handleMouseDown}
+            role="separator"
+            aria-label="Resize editor and preview panels"
+            aria-orientation="horizontal"
+            tabIndex={0}
+            onPointerDown={handlePointerDown}
             className="resizer-v h-2.5 shrink-0"
           />
 
-          <div className="flex-1 min-h-0 h-full overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-hidden">
             <LivePreview />
           </div>
         </div>
