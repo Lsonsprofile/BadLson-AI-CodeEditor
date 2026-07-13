@@ -46,7 +46,6 @@ function getLanguageColor(language: string, isEdit: boolean): string {
 function extractCodeBlocks(content: string): CodeBlock[] {
   const blocks: CodeBlock[] = [];
   
-  // Extract edit blocks first (higher priority)
   const editRegex = /```edit:([^\n]+)\n([\s\S]*?)```/g;
   let match;
   while ((match = editRegex.exec(content)) !== null) {
@@ -57,12 +56,10 @@ function extractCodeBlocks(content: string): CodeBlock[] {
     blocks.push({ language, code, filename, isEdit: true });
   }
 
-  // Extract regular code blocks
   const codeRegex = /```(\w+)?\n([\s\S]*?)```/g;
   while ((match = codeRegex.exec(content)) !== null) {
     const language = match[1] || 'text';
     const code = match[2].trim();
-    // Skip if already captured as edit block
     if (blocks.some(b => b.code === code && b.isEdit)) continue;
     
     let filename = null;
@@ -198,10 +195,7 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
 
   const timeStr = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // Extract all code blocks with their target filenames
   const codeBlocks = extractCodeBlocks(content);
-
-  // Build a map of code content -> block info for quick lookup in ReactMarkdown
   const codeToBlock = new Map<string, CodeBlock>();
   codeBlocks.forEach(block => {
     codeToBlock.set(block.code, block);
@@ -215,7 +209,8 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
         {isUser ? <User className="w-2.5 h-2.5 text-white" /> : <Bot className="w-2.5 h-2.5 text-white" />}
       </div>
 
-      <div className={`${isUser ? 'text-right' : ''} min-w-0 max-w-[260px]`}>
+      {/* ✅ FIXED: Increased max-width from 260px to 85% */}
+      <div className={`${isUser ? 'text-right' : ''} min-w-0 max-w-[85%]`}>
         <div className={`inline-block rounded-lg px-2.5 py-1.5 w-full ${
           isUser 
             ? 'bg-[#1f6feb] text-white' 
@@ -231,8 +226,6 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
                     const match = /language-(\w+)/.exec(className || '');
                     const language = match ? match[1] : 'text';
                     const codeString = String(children).replace(/\n$/, '');
-                    
-                    // Check if this code block has an associated block info
                     const blockInfo = codeToBlock.get(codeString);
 
                     if (!inline && language !== 'text') {
@@ -288,7 +281,6 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
                 {content}
               </ReactMarkdown>
               
-              {/* Streaming indicator at end of message */}
               {isStreaming && content.length > 0 && !content.endsWith('\n') && (
                 <StreamingCursor />
               )}

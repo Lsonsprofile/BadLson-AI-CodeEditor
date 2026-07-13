@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type { editor as MonacoEditorType } from 'monaco-editor';
 import { useWorkspaceStore } from '../../store/workspaceStore';
+import { useEditorStore } from '../../store/editorStore';
 import { getFileLanguage } from '../../utils/formatter';
 import { formatHTML, formatCSS, formatJS } from '../../utils/formatter';
 import { getContent, saveContent } from '../../lib/fileStorage';
@@ -14,6 +15,8 @@ export default function MonacoEditorComponent() {
     updateFile,
     editorOptions,
   } = useWorkspaceStore();
+
+  const { setEditor, setReady, setContext, setSelection } = useEditorStore();
 
   const [currentContent, setCurrentContent] = useState('');
   const language = getFileLanguage(activeFile);
@@ -42,23 +45,49 @@ export default function MonacoEditorComponent() {
 
   const handleEditorDidMount = useCallback((editor: MonacoEditorType.IStandaloneCodeEditor) => {
     editorRef.current = editor;
+    setEditor(editor);
+    setReady(true);
 
     // ─── AI CONTEXT: Capture selection & cursor ─────────────────────
-    editor.onDidChangeCursorSelection((e) => {
+    const updateContext = () => {
       const model = editor.getModel();
       if (!model) return;
 
-      const selection = model.getValueInRange(e.selection);
-      (window as any).__selectedEditorText = selection || null;
-      (window as any).__editorCursor = {
-        line: e.selection.startLineNumber,
-        column: e.selection.startColumn,
-      };
-    });
+      const selection = editor.getSelection();
+      const selectedText = selection ? model.getValueInRange(selection) : '';
+      const cursor = editor.getPosition();
 
-    // Clear selection on blur to avoid stale context
+      setContext({
+        activeFile: activeFile || '',
+        language: model.getLanguageId(),
+        selectedText: selectedText || '',
+        fullText: model.getValue(),
+        cursor: {
+          line: cursor?.lineNumber || 1,
+          column: cursor?.column || 1,
+        },
+      });
+
+      if (selection) {
+        setSelection({
+          startLineNumber: selection.startLineNumber,
+          startColumn: selection.startColumn,
+          endLineNumber: selection.endLineNumber,
+          endColumn: selection.endColumn,
+        });
+      } else {
+        setSelection(null);
+      }
+    };
+
+    // Update on selection/cursor change
+    editor.onDidChangeCursorSelection(updateContext);
+    editor.onDidChangeCursorPosition(updateContext);
+
+    // Clear selection on blur
     editor.onDidBlurEditorWidget(() => {
-      (window as any).__selectedEditorText = null;
+      setContext(null);
+      setSelection(null);
     });
 
     // ─── Keyboard shortcuts ───────────────────────────────────────────
@@ -88,8 +117,10 @@ export default function MonacoEditorComponent() {
     window.addEventListener('format-code', handleFormat);
     return () => {
       window.removeEventListener('format-code', handleFormat);
+      setEditor(null);
+      setReady(false);
     };
-  }, [activeFile, updateFile]);
+  }, [activeFile, updateFile, setEditor, setReady, setContext, setSelection]);
 
   const handleChange = useCallback(
     (value: string | undefined) => {
