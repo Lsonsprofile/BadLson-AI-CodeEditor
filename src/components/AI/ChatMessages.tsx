@@ -1,14 +1,18 @@
 // src/components/AI/ChatMessages.tsx
+// ─────────────────────────────────────────────────────────────────────
+// Chat Messages — Renders message list with auto-scroll, empty state, errors
+// ─────────────────────────────────────────────────────────────────────
+
 import { memo, useRef, useEffect } from 'react';
 import { Loader2, Sparkles } from 'lucide-react';
 import Message from './Message';
-import { type ChatMessage } from '../../services/api';
+import type { AIMessage } from '@/store/ai/ai.types';
 
 // ─── TYPES ───────────────────────────────────────────────────────────
 
 export interface ChatMessagesProps {
   /** Array of chat messages */
-  messages: ChatMessage[];
+  messages: AIMessage[];
   /** Current streaming content (if any) */
   streamingContent: string;
   /** Whether streaming is in progress */
@@ -70,34 +74,23 @@ export const ChatMessages = memo(function ChatMessages({
       )}
 
       {/* Chat messages */}
-      {messages.map((msg, index) => (
+      {messages.map((msg) => (
         <Message
-          key={`${msg.timestamp}-${index}`}
+          key={msg.id}
           role={msg.role}
           content={msg.content}
-          timestamp={msg.timestamp}
+          timestamp={msg.timestamp ?? Date.now()}
+          isStreaming={msg.role === 'assistant' && isStreaming && msg.content === streamingContent}
         />
       ))}
 
-      {/* Streaming message (live) */}
-      {isStreaming && streamingContent && (
-        <Message
-          role="assistant"
-          content={streamingContent}
-          timestamp={Date.now()}
-          isStreaming
-        />
-      )}
-
       {/* Loading indicator */}
-      {(isLoading || (isStreaming && !streamingContent)) && (
+      {isLoading && !isStreaming && (
         <div className="flex items-center gap-2 px-2 py-1">
           <div className="w-6 h-6 rounded bg-violet-600 flex items-center justify-center animate-pulse">
             <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
           </div>
-          <span className="text-[11px] text-[#8b949e]">
-            {isStreaming ? 'AI is typing...' : 'AI is thinking...'}
-          </span>
+          <span className="text-[11px] text-[#8b949e]">AI is thinking...</span>
         </div>
       )}
 

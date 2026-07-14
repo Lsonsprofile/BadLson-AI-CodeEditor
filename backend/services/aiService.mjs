@@ -1004,7 +1004,12 @@ export async function generateCodeResponse(projectFiles, userMessage, options = 
         const cleaned = cleanResponse(result.content);
         console.log(`[AI] Success: ${name}/${result.model}, length: ${cleaned.length}, mode: ${mode}`);
         
-        return cleaned;
+        return {
+          content: cleaned,
+          provider: result.provider,
+          model: result.model,
+          mode,
+      };
       } catch (error) {
         console.warn(`[AI] Provider ${name} failed:`, error.message);
         lastError = error;
@@ -1033,7 +1038,16 @@ export async function streamCodeResponse(projectFiles, userMessage, onChunk, opt
       try {
         const result = await call(messages, onChunk);
         console.log(`[AI] Stream success: ${name}/${result.model}`);
+<<<<<<< HEAD
         return result.content;
+=======
+        return {
+          content: result.content,
+          provider: result.provider,
+          model: result.model,
+          mode,
+      };
+>>>>>>> d2211de65cdc3dd6b72f7acbeea8cfde5040ab09
       } catch (error) {
         console.warn(`[AI] Stream provider ${name} failed:`, error.message);
         lastError = error;
