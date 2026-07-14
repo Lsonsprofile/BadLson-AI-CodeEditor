@@ -55,13 +55,38 @@ interface OpenRouterStreamChunk {
   };
 }
 
+// Model capabilities (common models)
+const OPENROUTER_MODEL_CAPABILITIES: Record<string, { maxOutput: number; context: number }> = {
+  'openai/gpt-4o': { maxOutput: 4096, context: 128000 },
+  'openai/gpt-4-turbo': { maxOutput: 4096, context: 128000 },
+  'anthropic/claude-3.5-sonnet': { maxOutput: 8192, context: 200000 },
+  'anthropic/claude-3-opus': { maxOutput: 4096, context: 200000 },
+  'google/gemini-2.0-flash-001': { maxOutput: 8192, context: 1048576 },
+  'mistralai/mistral-large-2411': { maxOutput: 8192, context: 131072 },
+  'meta-llama/llama-3.3-70b-instruct:free': { maxOutput: 8192, context: 131072 },
+  // fallback
+  'default': { maxOutput: 4096, context: 32768 },
+};
+
+const DEFAULT_SYSTEM_PROMPT = `You are an expert coding assistant integrated into a code editor. Follow these rules strictly:
+- Respond in Markdown format.
+- Wrap all code in fenced code blocks with the appropriate language.
+- Preserve indentation and whitespace.
+- Explain compilation or runtime errors clearly.
+- If the user's question is ambiguous, ask for clarification.
+- If you need to see more files, ask the user to share them.
+- Never invent code that is not present in the context.
+- If the prompt exceeds the model's context window, inform the user and suggest shortening the input.`;
+
 export class OpenRouterProvider implements AIProviderClient {
   readonly provider = 'openrouter' as const;
 
   private readonly config: AIProviderSettings;
+  private readonly systemPrompt: string;
 
-  constructor(config: AIProviderSettings) {
+  constructor(config: AIProviderSettings, systemPrompt?: string) {
     this.config = config;
+    this.systemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
   }
 
   private get apiKey(): string {
@@ -103,16 +128,43 @@ export class OpenRouterProvider implements AIProviderClient {
     request: AIProviderRequest,
     stream: boolean
   ): OpenRouterRequest {
+    // Inject system prompt
+    const messages: OpenRouterMessage[] = [];
+    const hasSystem = request.messages.some((m) => m.role === 'system');
+    if (!hasSystem) {
+      messages.push({ role: 'system', content: this.systemPrompt });
+    }
+    messages.push(...request.messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    })));
+
+    // Sanitize maxTokens
+    let maxTokens = request.maxTokens;
+    if (maxTokens === undefined || maxTokens < 1) {
+      maxTokens = 4096;
+    }
+    const caps = OPENROUTER_MODEL_CAPABILITIES[request.model] || OPENROUTER_MODEL_CAPABILITIES['default'];
+    if (maxTokens > caps.maxOutput) {
+      maxTokens = caps.maxOutput;
+    }
+
     return {
       model: request.model,
-      messages: request.messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+      messages,
       temperature: request.temperature,
-      max_tokens: request.maxTokens,
+      max_tokens: maxTokens,
       top_p: request.topP,
       stream,
+    };
+  }
+
+  private normalizeUsage(usage?: OpenRouterResponse['usage']): AIUsage | undefined {
+    if (!usage) return undefined;
+    return {
+      promptTokens: usage.prompt_tokens,
+      completionTokens: usage.completion_tokens,
+      totalTokens: usage.total_tokens,
     };
   }
 
@@ -159,23 +211,77 @@ export class OpenRouterProvider implements AIProviderClient {
     }
   }
 
+  private handleError(response: Response, text: string): never {
+    let message = `OpenRouter API error (${response.status})`;
+    switch (response.status) {
+      case 401:
+        message = 'OpenRouter API key is invalid. Please check your configuration.';
+        break;
+      case 413:
+        message = 'The prompt is too long for the selected model. Please shorten your input or switch to a model with larger context.';
+        break;
+      case 429:
+        message = 'OpenRouter rate limit exceeded. Please wait and try again.';
+        break;
+      case 500:
+        message = 'OpenRouter service is currently experiencing issues. Please try again later.';
+        break;
+      default:
+        if (text) message += `: ${text}`;
+        break;
+    }
+    throw new Error(message);
+  }
+
+  private async fetchWithTimeout(
+    url: string,
+    options: RequestInit,
+    timeoutMs: number = 60000
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timed out. The AI provider took too long to respond.');
+      }
+      throw error;
+    }
+  }
+
   async send(request: AIProviderRequest): Promise<AIProviderResponse> {
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: this.createHeaders(),
-      body: JSON.stringify(this.createBody(request, false)),
-      signal: request.signal,
-    });
+    const response = await this.fetchWithTimeout(
+      `${this.baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: this.createHeaders(),
+        body: JSON.stringify(this.createBody(request, false)),
+        signal: request.signal,
+      }
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`OpenRouter API error (${response.status}): ${errorText}`);
+      this.handleError(response, errorText);
     }
 
     const data = (await response.json()) as OpenRouterResponse;
     const choice = data.choices?.[0];
     if (!choice) {
       throw new Error('OpenRouter returned no response choices');
+    }
+
+    // Validate content
+    const content = choice.message.content?.trim();
+    if (!content) {
+      throw new Error('OpenRouter returned an empty response. Please try again.');
     }
 
     return {
@@ -185,15 +291,11 @@ export class OpenRouterProvider implements AIProviderClient {
       message: {
         id: crypto.randomUUID(),
         role: choice.message.role,
-        content: choice.message.content,
+        content: content,
         timestamp: Date.now(),
       },
       finishReason: choice.finish_reason,
-      usage: data.usage && {
-        promptTokens: data.usage.prompt_tokens,
-        completionTokens: data.usage.completion_tokens,
-        totalTokens: data.usage.total_tokens,
-      },
+      usage: this.normalizeUsage(data.usage),
     };
   }
 
@@ -203,21 +305,24 @@ export class OpenRouterProvider implements AIProviderClient {
   ): Promise<AIProviderResponse> {
     const streamId = crypto.randomUUID();
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: this.createHeaders(),
-      body: JSON.stringify(this.createBody(request, true)),
-      signal: request.signal,
-    });
+    const response = await this.fetchWithTimeout(
+      `${this.baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: this.createHeaders(),
+        body: JSON.stringify(this.createBody(request, true)),
+        signal: request.signal,
+      }
+    );
 
     if (!response.ok || !response.body) {
       const errorText = response.ok
         ? 'Missing response body'
         : await response.text();
-      throw new Error(`OpenRouter stream error (${response.status}): ${errorText}`);
+      this.handleError(response, errorText);
     }
 
-    const reader = response.body.getReader();
+    const reader = response.body!.getReader();
     const decoder = new TextDecoder();
 
     let buffer = '';
@@ -241,7 +346,7 @@ export class OpenRouterProvider implements AIProviderClient {
         }
       }
 
-      buffer += decoder.decode(); // final flush
+      buffer += decoder.decode();
       if (buffer) {
         const lines = buffer.split('\n');
         for (const line of lines) {
@@ -249,12 +354,16 @@ export class OpenRouterProvider implements AIProviderClient {
         }
       }
     } finally {
-      // ✅ safely cancel reader, ignore errors if already closed
       try {
         await reader.cancel();
       } catch {
-        // reader already closed – safe to ignore
+        // already closed
       }
+    }
+
+    // Validate final content
+    if (!state.complete.trim()) {
+      throw new Error('OpenRouter stream returned an empty response.');
     }
 
     onChunk({

@@ -1,4 +1,7 @@
 // src/ai/types.ts
+// ─────────────────────────────────────────────────────────────────────
+// AI Client Types — Types used by the AI client and request adapter
+// ─────────────────────────────────────────────────────────────────────
 
 import type { AIMessage, AIProvider } from '@/store/ai/ai.types';
 
@@ -10,6 +13,19 @@ export interface AIProviderRequest {
   model: string;
   messages: AIMessage[];
 
+  // ✅ NEW: Project context fields forwarded to backend
+  projectFiles: Record<string, string>;
+  activeFile: string | null;
+  recentFiles: string[];
+  folders?: string[];
+  selectedCode?: string | null;
+  consoleErrors?: string[];
+  buildErrors?: string[];
+  cursorPosition?: {
+    line: number;
+    column: number;
+  } | null;
+
   temperature?: number;
   maxTokens?: number;
   topP?: number;
@@ -18,7 +34,7 @@ export interface AIProviderRequest {
   /**
    * AbortSignal to cancel the request.
    */
-  signal?: AbortSignal; // ✅ added
+  signal?: AbortSignal;
 }
 
 /**

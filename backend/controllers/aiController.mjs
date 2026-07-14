@@ -33,7 +33,7 @@ export async function handleChat(options) {
     cursorPosition,
   });
 
-  const parsed = parseAiResponse(response);
+  const parsed = parseAiResponse(response.content);
 
   // Apply edits if any
   let updatedFiles = null;

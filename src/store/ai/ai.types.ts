@@ -1,4 +1,7 @@
 // src/store/ai/ai.types.ts
+// ─────────────────────────────────────────────────────────────────────
+// AI Type Definitions — Shared types for AI store, client, and components
+// ─────────────────────────────────────────────────────────────────────
 
 export type AIProvider = 'openrouter' | 'groq' | 'gemini';
 
@@ -14,6 +17,20 @@ export interface AIRequest {
   provider: AIProvider;
   model: string;
   messages: AIMessage[];
+
+  // ✅ NEW: Project context fields for backend awareness
+  projectFiles: Record<string, string>;
+  activeFile: string | null;
+  recentFiles: string[];
+  folders?: string[];
+  selectedCode?: string | null;
+  consoleErrors?: string[];
+  buildErrors?: string[];
+  cursorPosition?: {
+    line: number;
+    column: number;
+  } | null;
+
   options?: {
     temperature?: number;
     maxTokens?: number;
