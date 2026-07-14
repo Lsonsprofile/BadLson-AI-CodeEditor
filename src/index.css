@@ -2,19 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-@font-face {
-  font-family: 'Inter';
-  src: url('https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZ9hiA.woff2') format('woff2');
-  font-weight: 100 900;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Fira Code';
-  src: url('https://fonts.gstatic.com/s/firacode/v22/uU9eCBsR6Z2vfE9aq3bL0fxyUs4tcw.woff2') format('woff2');
-  font-weight: 300 700;
-  font-display: swap;
-}
+/* REMOVED: Broken @font-face declarations — use Google Fonts CDN instead */
+/* The woff2 URLs you had are invalid or blocked. Load fonts via <link> in index.html */
 
 @layer base {
 
@@ -26,6 +15,7 @@
   }
 
   html {
+    /* Fallback font stack — Inter will apply if loaded via Google Fonts link */
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
 
@@ -119,3 +109,11 @@
 .animate-message {
   animation: messageSlideIn 0.3s ease-out;
 }
+
+/* REMOVED: Vite default template CSS below — this was causing layout issues */
+/* 
+#root { max-width: 1280px; margin: 0 auto; padding: 2rem; text-align: center; }
+.logo { ... }
+.card { ... }
+.read-the-docs { ... }
+*/

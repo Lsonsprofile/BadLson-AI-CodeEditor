@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-07-14T20:04:14.935Z",
+  "stats": {
+    "filesChecked": 120,
+    "importsFound": 384,
+    "exportsFound": 217
+  },
+  "errors": [],
+  "warnings": []
+}

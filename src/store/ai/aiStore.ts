@@ -1,8 +1,4 @@
 // src/store/ai/aiStore.ts
-// ─────────────────────────────────────────────────────────────────────
-// AI Zustand Store — Manages AI conversation state, streaming, errors
-// ─────────────────────────────────────────────────────────────────────
-
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { persist } from 'zustand/middleware';
@@ -18,9 +14,7 @@ import type {
 } from './ai.types';
 import { aiClient } from '@/ai/client';
 import { toProviderRequest } from '@/ai/requestAdapter';
-import { useWorkspaceStore } from '@/store/workspaceStore'; // ✅ NEW
-
-// ─── TYPES ──────────────────────────────────────────────────────────
+import { useWorkspaceStore } from '@/store/workspaceStore';
 
 export type AIStatus =
   | 'idle'
@@ -39,23 +33,16 @@ export interface TokenUsage {
   totalTokens: number;
 }
 
-// ─── EXTENDED STATE ────────────────────────────────────────────────
-
 interface ExtendedAIState extends AIState {
   status: AIStatus;
   truncated: boolean;
   tokenUsage: TokenUsage | null;
 }
 
-// ─── STORE INTERFACE ───────────────────────────────────────────────
-
 interface AIStore extends ExtendedAIState {
-  // Actions
   setStatus: (status: AIStatus) => void;
   setTruncated: (truncated: boolean) => void;
   setTokenUsage: (usage: TokenUsage | null) => void;
-
-  // Existing actions
   setProvider: (provider: AIProvider) => void;
   setModel: (model: string) => void;
   setProviderConfig: (updates: Partial<AIProviderConfig>) => void;
@@ -80,14 +67,10 @@ interface AIStore extends ExtendedAIState {
   setDiagnostics: (diagnostics: AIDiagnostic[]) => void;
   clearDiagnostics: () => void;
   reset: () => void;
-
-  // High-level actions
   sendMessage: (content: string) => Promise<void>;
   stopGenerating: () => void;
   sendRequest: (request: AIRequest) => Promise<void>;
 }
-
-// ─── DEFAULT CONFIG ────────────────────────────────────────────────
 
 const DEFAULT_PROVIDER_CONFIG = Object.freeze({
   provider: 'openrouter',
@@ -99,11 +82,7 @@ const DEFAULT_PROVIDER_CONFIG = Object.freeze({
   enabled: true,
 } satisfies AIProviderConfig);
 
-// ─── ABORT CONTROLLER ──────────────────────────────────────────────
-
 let abortController: AbortController | null = null;
-
-// ─── INITIAL STATE ──────────────────────────────────────────────────
 
 const defaultStreamState: AIStreamState = {
   isStreaming: false,
@@ -130,19 +109,15 @@ const initialState: ExtendedAIState = {
   tokenUsage: null,
 };
 
-// ─── STORE ──────────────────────────────────────────────────────────
-
 export const useAIStore = create<AIStore>()(
   persist(
     (set, get) => ({
       ...initialState,
 
-      // ---------- NEW STATUS & METADATA ACTIONS ----------
       setStatus: (status) => set({ status }),
       setTruncated: (truncated) => set({ truncated }),
       setTokenUsage: (tokenUsage) => set({ tokenUsage }),
 
-      // ---------- EXISTING ACTIONS ----------
       setProvider: (provider) =>
         set((state) => ({
           provider,
@@ -281,7 +256,6 @@ export const useAIStore = create<AIStore>()(
           providerConfig: state.providerConfig,
         })),
 
-      // ---------- HIGH-LEVEL ACTIONS ----------
       sendMessage: async (content: string) => {
         if (get().loading) {
           throw new Error('Already processing a message');
@@ -303,12 +277,7 @@ export const useAIStore = create<AIStore>()(
           timestamp: Date.now(),
         };
 
-        // Build conversation array BEFORE set() to ensure consistency
-        const conversation = [
-          ...get().messages,
-          userMessage,
-          assistantPlaceholder,
-        ];
+        const conversation = [...get().messages, userMessage, assistantPlaceholder];
 
         set({
           messages: conversation,
@@ -317,25 +286,21 @@ export const useAIStore = create<AIStore>()(
 
         try {
           const storeState = get();
-          const workspace = useWorkspaceStore.getState(); // ✅ NEW: Get workspace context
+          const workspace = useWorkspaceStore.getState();
 
           const request: AIRequest = {
             id: crypto.randomUUID(),
             provider: storeState.provider,
             model: storeState.model,
             messages: conversation,
-
-            // ✅ NEW: Project context from workspace store
             projectFiles: workspace.files,
             activeFile: workspace.activeFile || null,
             recentFiles: workspace.openFiles,
             folders: workspace.folders,
-
             selectedCode: null,
             consoleErrors: [],
             buildErrors: [],
             cursorPosition: null,
-
             options: {
               temperature: storeState.providerConfig.temperature,
               maxTokens: storeState.providerConfig.maxTokens,
@@ -386,7 +351,6 @@ export const useAIStore = create<AIStore>()(
             }));
           });
 
-          // Final update (in case done event didn't fire)
           const finalMessages = get().messages;
           const finalAssistant = finalMessages.find((m) => m.id === assistantId);
           if (finalAssistant) {
@@ -458,9 +422,10 @@ export const useAIStore = create<AIStore>()(
         fallbackEnabled: state.fallbackEnabled,
         providerConfig: state.providerConfig,
         conversationId: state.conversationId,
-        messages: state.messages,
-        suggestions: state.suggestions,
-        diagnostics: state.diagnostics,
+        // Limit persisted messages to last 20
+        messages: state.messages.slice(-20),
+        suggestions: state.suggestions.slice(-10),
+        diagnostics: state.diagnostics.slice(-10),
       }),
     }
   )
@@ -481,7 +446,6 @@ export const useAISuggestions = () => useAIStore((state) => state.suggestions);
 export const useAIDiagnostics = () => useAIStore((state) => state.diagnostics);
 export const useAIError = () => useAIStore((state) => state.lastError);
 
-// ✅ Fixed: Use useShallow for shallow comparison in Zustand v5
 export const useAIActions = (): Pick<AIStore, 'sendMessage' | 'stopGenerating' | 'setProvider' | 'setModel' | 'setProviderConfig' | 'clearMessages' | 'reset'> =>
   useAIStore(
     useShallow((state) => ({

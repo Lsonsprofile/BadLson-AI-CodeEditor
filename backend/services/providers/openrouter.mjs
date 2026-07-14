@@ -1,72 +1,6 @@
-// src/ai/providers/openrouter.ts
+// backend/services/providers/openrouter.mjs
 
-import type { AIMessage } from '@/store/ai/ai.types';
-import type {
-  AIProviderRequest,
-  AIProviderResponse,
-  AIStreamChunk,
-  AIProviderClient,
-  AIUsage,
-} from '@/ai/types';
-import type { AIProviderSettings } from '@/ai/config';
-
-interface OpenRouterMessage {
-  role: AIMessage['role'];
-  content: string;
-}
-
-interface OpenRouterRequest {
-  model: string;
-  messages: OpenRouterMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  top_p?: number;
-  stream?: boolean;
-}
-
-interface OpenRouterResponse {
-  id: string;
-  model: string;
-  choices: Array<{
-    finish_reason?: string;
-    message: {
-      role: AIMessage['role'];
-      content: string;
-    };
-  }>;
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-interface OpenRouterStreamChunk {
-  id: string;
-  model: string;
-  choices?: Array<{
-    delta?: { content?: string };
-    finish_reason?: string;
-  }>;
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-// Model capabilities (common models)
-const OPENROUTER_MODEL_CAPABILITIES: Record<string, { maxOutput: number; context: number }> = {
-  'openai/gpt-4o': { maxOutput: 4096, context: 128000 },
-  'openai/gpt-4-turbo': { maxOutput: 4096, context: 128000 },
-  'anthropic/claude-3.5-sonnet': { maxOutput: 8192, context: 200000 },
-  'anthropic/claude-3-opus': { maxOutput: 4096, context: 200000 },
-  'google/gemini-2.0-flash-001': { maxOutput: 8192, context: 1048576 },
-  'mistralai/mistral-large-2411': { maxOutput: 8192, context: 131072 },
-  'meta-llama/llama-3.3-70b-instruct:free': { maxOutput: 8192, context: 131072 },
-  // fallback
-  'default': { maxOutput: 4096, context: 32768 },
-};
+import { BaseAIProvider } from './base.mjs';
 
 const DEFAULT_SYSTEM_PROMPT = `You are an expert coding assistant integrated into a code editor. Follow these rules strictly:
 - Respond in Markdown format.
@@ -78,58 +12,60 @@ const DEFAULT_SYSTEM_PROMPT = `You are an expert coding assistant integrated int
 - Never invent code that is not present in the context.
 - If the prompt exceeds the model's context window, inform the user and suggest shortening the input.`;
 
-export class OpenRouterProvider implements AIProviderClient {
-  readonly provider = 'openrouter' as const;
+// Model capabilities (common models)
+const OPENROUTER_MODEL_CAPABILITIES = {
+  'openai/gpt-4o': { maxOutput: 4096, context: 128000 },
+  'openai/gpt-4-turbo': { maxOutput: 4096, context: 128000 },
+  'anthropic/claude-3.5-sonnet': { maxOutput: 8192, context: 200000 },
+  'anthropic/claude-3-opus': { maxOutput: 4096, context: 200000 },
+  'google/gemini-2.0-flash-001': { maxOutput: 8192, context: 1048576 },
+  'mistralai/mistral-large-2411': { maxOutput: 8192, context: 131072 },
+  'meta-llama/llama-3.3-70b-instruct:free': { maxOutput: 8192, context: 131072 },
+  // fallback
+  'default': { maxOutput: 4096, context: 32768 },
+};
 
-  private readonly config: AIProviderSettings;
-  private readonly systemPrompt: string;
-
-  constructor(config: AIProviderSettings, systemPrompt?: string) {
+export class OpenRouterProvider extends BaseAIProvider {
+  constructor(config, systemPrompt) {
+    super();
     this.config = config;
     this.systemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
   }
 
-  private get apiKey(): string {
+  get provider() {
+    return 'openrouter';
+  }
+
+  get apiKey() {
     if (!this.config.apiKey) {
       throw new Error('OpenRouter API key is not configured');
     }
     return this.config.apiKey;
   }
 
-  private get baseUrl(): string {
+  get baseUrl() {
     return this.config.baseUrl;
   }
 
-  private createHeaders(): Headers {
-    const headers = new Headers({
+  createHeaders() {
+    const headers = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.apiKey}`,
-    });
+      'Authorization': `Bearer ${this.apiKey}`,
+      'X-Title': 'BadLson AI Code Editor',
+    };
 
     if (this.config.headers) {
       for (const [key, value] of Object.entries(this.config.headers)) {
-        headers.set(key, value);
-      }
-    }
-
-    if (typeof window !== 'undefined') {
-      if (!headers.has('X-Title')) {
-        headers.set('X-Title', 'BadLson AI Code Editor');
-      }
-      if (!headers.has('HTTP-Referer')) {
-        headers.set('HTTP-Referer', window.location.origin);
+        headers[key] = value;
       }
     }
 
     return headers;
   }
 
-  private createBody(
-    request: AIProviderRequest,
-    stream: boolean
-  ): OpenRouterRequest {
+  createBody(request, stream) {
     // Inject system prompt
-    const messages: OpenRouterMessage[] = [];
+    const messages = [];
     const hasSystem = request.messages.some((m) => m.role === 'system');
     if (!hasSystem) {
       messages.push({ role: 'system', content: this.systemPrompt });
@@ -159,7 +95,7 @@ export class OpenRouterProvider implements AIProviderClient {
     };
   }
 
-  private normalizeUsage(usage?: OpenRouterResponse['usage']): AIUsage | undefined {
+  normalizeUsage(usage) {
     if (!usage) return undefined;
     return {
       promptTokens: usage.prompt_tokens,
@@ -168,22 +104,13 @@ export class OpenRouterProvider implements AIProviderClient {
     };
   }
 
-  private processSseLine(
-    line: string,
-    state: {
-      complete: string;
-      finishReason?: string;
-      usage?: AIUsage;
-    },
-    onChunk: (chunk: AIStreamChunk) => void,
-    requestId: string
-  ): void {
+  processSseLine(line, state, onChunk, requestId) {
     if (!line.startsWith('data:')) return;
     const payload = line.replace(/^data:\s*/, '');
     if (payload === '[DONE]') return;
 
     try {
-      const parsed = JSON.parse(payload) as OpenRouterStreamChunk;
+      const parsed = JSON.parse(payload);
 
       if (parsed.usage) {
         state.usage = {
@@ -211,7 +138,7 @@ export class OpenRouterProvider implements AIProviderClient {
     }
   }
 
-  private handleError(response: Response, text: string): never {
+  handleError(response, text) {
     let message = `OpenRouter API error (${response.status})`;
     switch (response.status) {
       case 401:
@@ -233,11 +160,7 @@ export class OpenRouterProvider implements AIProviderClient {
     throw new Error(message);
   }
 
-  private async fetchWithTimeout(
-    url: string,
-    options: RequestInit,
-    timeoutMs: number = 60000
-  ): Promise<Response> {
+  async fetchWithTimeout(url, options, timeoutMs = 60000) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -256,13 +179,14 @@ export class OpenRouterProvider implements AIProviderClient {
     }
   }
 
-  async send(request: AIProviderRequest): Promise<AIProviderResponse> {
+  async send(request) {
+    const body = this.createBody(request, false);
     const response = await this.fetchWithTimeout(
       `${this.baseUrl}/chat/completions`,
       {
         method: 'POST',
         headers: this.createHeaders(),
-        body: JSON.stringify(this.createBody(request, false)),
+        body: JSON.stringify(body),
         signal: request.signal,
       }
     );
@@ -272,13 +196,12 @@ export class OpenRouterProvider implements AIProviderClient {
       this.handleError(response, errorText);
     }
 
-    const data = (await response.json()) as OpenRouterResponse;
+    const data = await response.json();
     const choice = data.choices?.[0];
     if (!choice) {
       throw new Error('OpenRouter returned no response choices');
     }
 
-    // Validate content
     const content = choice.message.content?.trim();
     if (!content) {
       throw new Error('OpenRouter returned an empty response. Please try again.');
@@ -299,37 +222,33 @@ export class OpenRouterProvider implements AIProviderClient {
     };
   }
 
-  async stream(
-    request: AIProviderRequest,
-    onChunk: (chunk: AIStreamChunk) => void
-  ): Promise<AIProviderResponse> {
+  async stream(request, onChunk) {
     const streamId = crypto.randomUUID();
+    const body = this.createBody(request, true);
 
     const response = await this.fetchWithTimeout(
       `${this.baseUrl}/chat/completions`,
       {
         method: 'POST',
         headers: this.createHeaders(),
-        body: JSON.stringify(this.createBody(request, true)),
+        body: JSON.stringify(body),
         signal: request.signal,
       }
     );
 
     if (!response.ok || !response.body) {
-      const errorText = response.ok
-        ? 'Missing response body'
-        : await response.text();
+      const errorText = response.ok ? 'Missing response body' : await response.text();
       this.handleError(response, errorText);
     }
 
-    const reader = response.body!.getReader();
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
     let buffer = '';
     const state = {
       complete: '',
-      finishReason: undefined as string | undefined,
-      usage: undefined as AIUsage | undefined,
+      finishReason: undefined,
+      usage: undefined,
     };
 
     try {
@@ -361,7 +280,6 @@ export class OpenRouterProvider implements AIProviderClient {
       }
     }
 
-    // Validate final content
     if (!state.complete.trim()) {
       throw new Error('OpenRouter stream returned an empty response.');
     }

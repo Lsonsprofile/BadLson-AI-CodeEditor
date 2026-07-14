@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "start": "node backend/server.mjs",
     "server": "node backend/server.mjs",
-    "dev:server": "node --watch backend/server.mjs"
+    "dev:server": "node --watch backend/server.mjs",
+    "validate": "node backend/scripts/validate-project.mjs",
+    "validate:watch": "node --watch backend/scripts/validate-project.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.10.0",

@@ -14,12 +14,6 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-// DEBUG: Check if env vars are loaded
-console.log('Firebase Config:', {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY ? 'EXISTS' : 'MISSING',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ? 'EXISTS' : 'MISSING',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID ? 'EXISTS' : 'MISSING',
-});
 
 const app = initializeApp(firebaseConfig);
 

@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import { testConnection } from './services/aiService.mjs';
+import fs from 'fs';
 
 import aiRoutes from './routes/aiRoutes.mjs';
 import projectRoutes from './routes/projectRoutes.mjs';
@@ -36,9 +37,21 @@ app.use(cors({
 
 // ─── BODY PARSING ───────────────────────────────────────────────────
 // INCREASED LIMIT for large projects — 45k files can be ~200MB+ of JSON
-// But we also add middleware to warn about oversized requests
 app.use(express.json({ limit: '250mb' }));
 app.use(express.urlencoded({ extended: true, limit: '250mb' }));
+
+// ─── TIMEOUT & CONNECTION HANDLING (CRITICAL for 46K file uploads) ───
+app.use((req, res, next) => {
+  // Extend timeout for upload routes — 5 minutes per request
+  if (req.path.includes('/upload/')) {
+    req.setTimeout(300000); // 5 minutes
+    res.setTimeout(300000);
+  } else {
+    req.setTimeout(30000); // 30s default
+    res.setTimeout(30000);
+  }
+  next();
+});
 
 // Log warning for very large requests (helps debug 45k file issues)
 app.use((req, res, next) => {
@@ -50,8 +63,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Static uploads
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// ─── ENSURE UPLOADS DIRECTORY EXISTS ───────────────────────────────
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const EXTRACTED_DIR = path.join(__dirname, 'uploads', 'extracted');
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(EXTRACTED_DIR, { recursive: true });
+
+// Static uploads (with cache control)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  maxAge: '1d',
+  etag: false,
+}));
 
 // ─── HEALTH CHECK ───────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
@@ -59,6 +81,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok', 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    memory: process.memoryUsage(),
   });
 });
 
@@ -95,6 +118,16 @@ app.get('/api/diagnose', async (req, res) => {
   }
 });
 
+// ─── UPLOAD STATUS ENDPOINT (for large upload progress tracking) ───
+app.get('/api/upload/status', (req, res) => {
+  res.json({
+    maxFileSize: 50 * 1024 * 1024, // 50MB
+    maxBatchSize: 500, // files per batch
+    recommendedBatchSize: 500,
+    supportsConcurrency: true,
+  });
+});
+
 // ─── API ROUTES ─────────────────────────────────────────────────────
 app.use('/api/ai', aiRoutes);
 app.use('/api/projects', projectRoutes);
@@ -108,7 +141,34 @@ app.use((req, res) => {
 // ─── ERROR HANDLER ──────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Server Error:', err);
-  res.status(500).json({ error: err.message || 'Internal Server Error' });
+  
+  // Handle multer-specific errors
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ 
+      error: 'File too large', 
+      maxSize: '50MB',
+      message: err.message 
+    });
+  }
+  if (err.code === 'LIMIT_FILE_COUNT') {
+    return res.status(413).json({ 
+      error: 'Too many files', 
+      maxFiles: 500,
+      message: err.message 
+    });
+  }
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({ 
+      error: 'Unexpected field name', 
+      message: 'Use "files" as the field name for uploads' 
+    });
+  }
+
+  res.status(err.status || 500).json({ 
+    error: err.message || 'Internal Server Error',
+    path: req.path,
+    method: req.method,
+  });
 });
 
 // ─── START SERVER ───────────────────────────────────────────────────
@@ -126,15 +186,42 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`   POST /api/ai/analyze - Code analysis`);
   console.log(`   POST /api/ai/explain - Code explanation`);
   console.log(`   GET  /api/ai/models  - Available AI models`);
+  console.log(`📁 Upload endpoints:`);
+  console.log(`   POST /api/upload/file         - Single file upload`);
+  console.log(`   POST /api/upload/zip          - ZIP file extraction`);
+  console.log(`   POST /api/upload/folder       - Direct folder upload (≤500 files)`);
+  console.log(`   POST /api/upload/folder-batch - Batch folder upload (500 files/batch)`);
+  console.log(`   GET  /api/upload/status       - Upload configuration`);
   console.log(`🔍 Health: GET /api/health`);
   console.log(`🔍 Diagnose: GET /api/diagnose`);
 });
 
+// ─── GRACEFUL SHUTDOWN ──────────────────────────────────────────────
 process.on('SIGINT', () => {
-  console.log('\nShutting down server...');
+  console.log('\n⚠️ SIGINT received. Shutting down server...');
   server.close(() => {
+    console.log('✅ Server closed. Cleaning up...');
     process.exit(0);
   });
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n⚠️ SIGTERM received. Shutting down server...');
+  server.close(() => {
+    console.log('✅ Server closed gracefully.');
+    process.exit(0);
+  });
+});
+
+// ─── UNCAUGHT EXCEPTION HANDLER ─────────────────────────────────────
+process.on('uncaughtException', (err) => {
+  console.error('💥 Uncaught Exception:', err);
+  // Give time for logs to flush, then exit
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 export default app;

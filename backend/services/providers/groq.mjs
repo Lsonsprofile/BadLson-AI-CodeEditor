@@ -1,70 +1,6 @@
-// src/ai/providers/groq.ts
+// backend/services/providers/groq.mjs
 
-import type { AIMessage } from '@/store/ai/ai.types';
-import type {
-  AIProviderRequest,
-  AIProviderResponse,
-  AIStreamChunk,
-  AIProviderClient,
-  AIUsage,
-} from '@/ai/types';
-import type { AIProviderSettings } from '@/ai/config';
-
-interface GroqMessage {
-  role: AIMessage['role'];
-  content: string;
-}
-
-interface GroqRequest {
-  model: string;
-  messages: GroqMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  top_p?: number;
-  stream?: boolean;
-}
-
-interface GroqResponse {
-  id: string;
-  model: string;
-  choices: Array<{
-    finish_reason?: string;
-    message: {
-      role: AIMessage['role'];
-      content: string;
-    };
-  }>;
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-interface GroqStreamChunk {
-  id: string;
-  model?: string;
-  choices?: Array<{
-    delta?: {
-      role?: AIMessage['role'];
-      content?: string;
-    };
-    finish_reason?: string | null;
-  }>;
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-// Model capability map (max output tokens, context window)
-const GROQ_MODEL_CAPABILITIES: Record<string, { maxOutput: number; context: number }> = {
-  'meta-llama/llama-4-scout-17b-16e-instruct': { maxOutput: 8192, context: 131072 },
-  'llama-3.3-70b-versatile': { maxOutput: 8192, context: 131072 },
-  'llama-3.1-8b-instant': { maxOutput: 8192, context: 131072 },
-  'gemma2-9b-it': { maxOutput: 8192, context: 8192 },
-};
+import { BaseAIProvider } from './base.mjs';
 
 const DEFAULT_SYSTEM_PROMPT = `You are an expert coding assistant integrated into a code editor. Follow these rules strictly:
 - Respond in Markdown format.
@@ -76,42 +12,48 @@ const DEFAULT_SYSTEM_PROMPT = `You are an expert coding assistant integrated int
 - Never invent code that is not present in the context.
 - If the prompt exceeds the model's context window, inform the user and suggest shortening the input.`;
 
-export class GroqProvider implements AIProviderClient {
-  readonly provider = 'groq' as const;
+const GROQ_MODEL_CAPABILITIES = {
+  'meta-llama/llama-4-scout-17b-16e-instruct': { maxOutput: 8192, context: 131072 },
+  'llama-3.3-70b-versatile': { maxOutput: 8192, context: 131072 },
+  'llama-3.1-8b-instant': { maxOutput: 8192, context: 131072 },
+  'gemma2-9b-it': { maxOutput: 8192, context: 8192 },
+};
 
-  private readonly config: AIProviderSettings;
-  private readonly systemPrompt: string;
-
-  constructor(config: AIProviderSettings, systemPrompt?: string) {
+export class GroqProvider extends BaseAIProvider {
+  constructor(config, systemPrompt) {
+    super();
     this.config = config;
     this.systemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
   }
 
-  private get apiKey(): string {
+  get provider() {
+    return 'groq';
+  }
+
+  get apiKey() {
     if (!this.config.apiKey) {
       throw new Error('Groq API key is not configured');
     }
     return this.config.apiKey;
   }
 
-  private createHeaders(): Headers {
-    const headers = new Headers({
+  createHeaders() {
+    const headers = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.apiKey}`,
-    });
+      'Authorization': `Bearer ${this.apiKey}`,
+    };
 
     if (this.config.headers) {
       for (const [key, value] of Object.entries(this.config.headers)) {
-        headers.set(key, value);
+        headers[key] = value;
       }
     }
 
     return headers;
   }
 
-  private createBody(request: AIProviderRequest, stream: boolean): GroqRequest {
-    // Ensure system message is first, if not already present
-    const messages: GroqMessage[] = [];
+  createBody(request, stream) {
+    const messages = [];
     const hasSystem = request.messages.some((m) => m.role === 'system');
     if (!hasSystem) {
       messages.push({ role: 'system', content: this.systemPrompt });
@@ -121,12 +63,10 @@ export class GroqProvider implements AIProviderClient {
       content: m.content,
     })));
 
-    // Sanitize maxTokens
     let maxTokens = request.maxTokens;
     if (maxTokens === undefined || maxTokens < 1) {
-      maxTokens = 4096; // default
+      maxTokens = 4096;
     }
-    // Cap based on model capabilities
     const caps = GROQ_MODEL_CAPABILITIES[request.model];
     if (caps && maxTokens > caps.maxOutput) {
       maxTokens = caps.maxOutput;
@@ -142,7 +82,7 @@ export class GroqProvider implements AIProviderClient {
     };
   }
 
-  private normalizeUsage(usage?: GroqStreamChunk['usage']): AIUsage | undefined {
+  normalizeUsage(usage) {
     if (!usage) return undefined;
     return {
       promptTokens: usage.prompt_tokens,
@@ -151,22 +91,13 @@ export class GroqProvider implements AIProviderClient {
     };
   }
 
-  private processSseLine(
-    line: string,
-    state: {
-      complete: string;
-      finishReason?: string;
-      usage?: AIUsage;
-    },
-    onChunk: (chunk: AIStreamChunk) => void,
-    requestId: string
-  ): void {
+  processSseLine(line, state, onChunk, requestId) {
     if (!line.startsWith('data:')) return;
     const payload = line.replace(/^data:\s*/, '');
     if (payload === '[DONE]') return;
 
     try {
-      const parsed = JSON.parse(payload) as GroqStreamChunk;
+      const parsed = JSON.parse(payload);
 
       state.usage = this.normalizeUsage(parsed.usage) ?? state.usage;
 
@@ -186,7 +117,7 @@ export class GroqProvider implements AIProviderClient {
     }
   }
 
-  private handleError(response: Response, text: string): never {
+  handleError(response, text) {
     let message = `Groq API error (${response.status})`;
     switch (response.status) {
       case 401:
@@ -208,11 +139,7 @@ export class GroqProvider implements AIProviderClient {
     throw new Error(message);
   }
 
-  private async fetchWithTimeout(
-    url: string,
-    options: RequestInit,
-    timeoutMs: number = 60000
-  ): Promise<Response> {
+  async fetchWithTimeout(url, options, timeoutMs = 60000) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -231,7 +158,7 @@ export class GroqProvider implements AIProviderClient {
     }
   }
 
-  async send(request: AIProviderRequest): Promise<AIProviderResponse> {
+  async send(request) {
     const body = this.createBody(request, false);
     const response = await this.fetchWithTimeout(
       `${this.config.baseUrl}/chat/completions`,
@@ -248,13 +175,12 @@ export class GroqProvider implements AIProviderClient {
       this.handleError(response, errorText);
     }
 
-    const data = (await response.json()) as GroqResponse;
+    const data = await response.json();
     const choice = data.choices?.[0];
     if (!choice) {
       throw new Error('Groq returned no response choices');
     }
 
-    // Validate response content
     const content = choice.message.content?.trim();
     if (!content) {
       throw new Error('Groq returned an empty response. Please try again.');
@@ -275,10 +201,7 @@ export class GroqProvider implements AIProviderClient {
     };
   }
 
-  async stream(
-    request: AIProviderRequest,
-    onChunk: (chunk: AIStreamChunk) => void
-  ): Promise<AIProviderResponse> {
+  async stream(request, onChunk) {
     const streamId = crypto.randomUUID();
     const body = this.createBody(request, true);
 
@@ -297,14 +220,14 @@ export class GroqProvider implements AIProviderClient {
       this.handleError(response, errorText);
     }
 
-    const reader = response.body!.getReader();
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
     let buffer = '';
     const state = {
       complete: '',
-      finishReason: undefined as string | undefined,
-      usage: undefined as AIUsage | undefined,
+      finishReason: undefined,
+      usage: undefined,
     };
 
     try {
@@ -321,7 +244,6 @@ export class GroqProvider implements AIProviderClient {
         }
       }
 
-      // Flush remaining buffer
       buffer += decoder.decode();
       if (buffer) {
         const lines = buffer.split('\n');
@@ -337,7 +259,6 @@ export class GroqProvider implements AIProviderClient {
       }
     }
 
-    // Validate final content
     if (!state.complete.trim()) {
       throw new Error('Groq stream returned an empty response.');
     }

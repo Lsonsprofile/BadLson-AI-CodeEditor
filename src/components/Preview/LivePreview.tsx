@@ -7,7 +7,6 @@ import { Globe, RefreshCw, ExternalLink, Maximize2, Minimize2, Smartphone, Table
 export default function LivePreview() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [scale, setScale] = useState(1);
   const [iframeContent, setIframeContent] = useState('');
@@ -38,11 +37,9 @@ export default function LivePreview() {
     return candidate || null;
   };
 
-  // Async version: fetches from IndexedDB or falls back to Zustand
   const getFileContentAsync = async (relativePath: string, baseFolder: string): Promise<string> => {
     const resolvedFile = resolveRelativePath(relativePath, baseFolder);
     
-    // Check Zustand first (for newly created files)
     if (resolvedFile && files[resolvedFile] !== undefined) {
       return files[resolvedFile] as string;
     }
@@ -52,7 +49,6 @@ export default function LivePreview() {
       return files[rootResolved] as string;
     }
 
-    // Fallback to IndexedDB
     if (resolvedFile) {
       const content = await getContent(resolvedFile);
       if (content !== null) return content;
@@ -96,12 +92,10 @@ export default function LivePreview() {
     return '';
   };
 
-  // Async version for blob assets (images, fonts, etc.)
   const getLocalDataUrlAsync = async (relativePath: string, baseFolder: string): Promise<string | null> => {
     const resolved = resolveRelativePath(relativePath, baseFolder) || normalizeFilePath(relativePath);
     if (!resolved) return null;
 
-    // Check if it's an image type stored as blob
     const type = getContentType(resolved);
     if (type.startsWith('image/') || type.startsWith('font/') || type.startsWith('audio/') || type.startsWith('video/')) {
       const blob = await getBlob(resolved);
@@ -110,7 +104,6 @@ export default function LivePreview() {
       }
     }
 
-    // Fallback to text content
     const fileContent = files[resolved] as string | undefined;
     if (typeof fileContent === 'string') {
       return createDataUrl(resolved, fileContent) || null;
@@ -173,7 +166,6 @@ export default function LivePreview() {
   const rewriteHtmlSources = async (html: string, baseFolder: string): Promise<string> => {
     let result = html;
 
-    // Replace src/poster/data-src attributes
     const srcMatches = [...result.matchAll(/\b(src|poster|data-src)=(['"])(?!https?:|data:|\/\/)([^"']+)\2/gi)];
     for (const match of srcMatches) {
       const [fullMatch, attr, quote, value] = match;
@@ -183,7 +175,6 @@ export default function LivePreview() {
       }
     }
 
-    // Replace srcset attributes
     const srcsetMatches = [...result.matchAll(/\bsrcset=(['"])([^"']+)\1/gi)];
     for (const match of srcsetMatches) {
       const [fullMatch, quote, value] = match;
@@ -220,7 +211,6 @@ export default function LivePreview() {
     return Object.keys(files).find((path) => path.endsWith('/index.html')) || '';
   };
 
-  // ✅ FIXED: Helper function to safely wrap user scripts with DOM ready check
   const wrapUserScript = (js: string): string => {
     return `
 <script>
@@ -239,7 +229,6 @@ export default function LivePreview() {
     }
   }
   
-  // Wait for DOM to be ready before executing user code
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', safeExecute);
   } else {
@@ -252,7 +241,6 @@ export default function LivePreview() {
   const generatePreview = useCallback(async () => {
     const htmlPath = findPreviewHtmlPath();
     
-    // Fetch HTML content from IndexedDB or Zustand
     let html = '';
     if (htmlPath) {
       if (files[htmlPath] !== undefined) {
@@ -311,16 +299,10 @@ export default function LivePreview() {
     previewHTML = await inlineLocalScripts(previewHTML, baseFolder);
     previewHTML = await rewriteHtmlSources(previewHTML, baseFolder);
 
-    // ✅ FIXED: Use the wrapped script with DOM ready check
     if (js) {
       const wrappedJS = wrapUserScript(js);
       previewHTML = previewHTML.replace(/<script[^>]*src=["'][^"']*script\.js["'][^>]*><\/script>/gi, '');
       previewHTML = previewHTML.replace('</body>', wrappedJS + '</body>');
-    }
-
-    if (!previewHTML.includes('fonts.googleapis.com')) {
-      const fontLink = '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">';
-      previewHTML = previewHTML.replace('</head>', fontLink + '</head>');
     }
 
     if (!previewHTML.includes('<html')) {
@@ -334,7 +316,6 @@ export default function LivePreview() {
     return previewHTML;
   }, [files, activeFile]);
 
-  // Regenerate preview when dependencies change
   useEffect(() => {
     let cancelled = false;
     
@@ -449,19 +430,59 @@ export default function LivePreview() {
   const device = getDeviceConfig();
   const isSimulated = previewDevice !== 'desktop';
 
+  // ─── FIXED HANDLERS ──────────────────────────────────────────────
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    const html = await generatePreview();
-    setIframeContent(html);
-    setTimeout(() => setIsRefreshing(false), 500);
+    try {
+      const html = await generatePreview();
+      setIframeContent(html);
+    } catch (err) {
+      console.error('Refresh failed:', err);
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
   };
 
   const handleOpenNewTab = async () => {
-    const html = await generatePreview();
-    const blob = new Blob([html], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
+    try {
+      const html = await generatePreview();
+      const blob = new Blob([html], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      
+      const newWindow = window.open('', '_blank');
+      if (newWindow) {
+        newWindow.location.href = url;
+        // Revoke after a minute to allow the new tab to load
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } else {
+        // Fallback to download if popup blocked
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'preview.html';
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      console.error('Open in new tab failed:', err);
+    }
   };
+
+  const handleFullscreen = async () => {
+    const container = containerRef.current;
+    if (!container) return;
+    try {
+      if (!document.fullscreenElement) {
+        await container.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {
+      console.error('Fullscreen error:', err);
+    }
+  };
+
+  // ─── RENDER ──────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-full w-full bg-[#0d1117]">
@@ -502,11 +523,11 @@ export default function LivePreview() {
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
           <button 
-            onClick={() => setIsFullscreen(!isFullscreen)} 
+            onClick={handleFullscreen} 
             className="p-1 text-slate-400 hover:text-white rounded hover:bg-[#30363d] transition" 
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            title={document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen'}
           >
-            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            {document.fullscreenElement ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>

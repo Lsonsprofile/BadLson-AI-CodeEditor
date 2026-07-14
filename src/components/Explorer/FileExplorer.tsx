@@ -23,6 +23,7 @@ import {
   FolderPlus,
   FilePlus,
   Upload,
+  FileArchive,
 } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { getContent, deleteContent, deleteBlob, deleteFolderContents, saveContent, saveBlob } from '../../lib/fileStorage';
@@ -150,8 +151,6 @@ function getVisibleNodes(nodes: TreeNode[], openFolders: Set<string>, result: Tr
   return result;
 }
 
-// ─── FIXED: TreeItem with working checkmark ────────────────────────
-
 const TreeItem = ({
   node,
   isActive,
@@ -185,7 +184,6 @@ const TreeItem = ({
           onContextMenu={(e) => onContextMenu(e, node)}
           className="group flex items-center gap-1.5 w-full px-2 py-0.5 text-[11px] rounded-sm transition-colors cursor-pointer select-none text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]"
         >
-          {/* ✅ FIXED: Checkmark now toggles selection */}
           <button
             onClick={(e) => { e.stopPropagation(); onToggleSelect(node.name); }}
             className="shrink-0 text-[#8b949e] hover:text-[#c9d1d9]"
@@ -223,7 +221,6 @@ const TreeItem = ({
               : 'text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]'
           }`}
         >
-          {/* ✅ FIXED: Checkmark now toggles selection */}
           <button onClick={(e) => { e.stopPropagation(); onToggleSelect(node.name); }} className="shrink-0">
             {isSelected ? <CheckSquare className="w-3 h-3 text-[#58a6ff]" /> : <Square className="w-3 h-3" />}
           </button>
@@ -279,6 +276,7 @@ export default function FileExplorer() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: TreeNode | null }>({ x: 0, y: 0, node: null });
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const [scrollTop, setScrollTop] = useState(0);
@@ -575,27 +573,28 @@ export default function FileExplorer() {
     });
   }, []);
 
+  // ─── UPDATED: SMART FOLDER UPLOAD (with concurrency & retry) ─────
   const handleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
 
     const fileArray = Array.from(fileList);
     const totalFiles = fileArray.length;
-    
-    console.log(`[Upload] Selected ${totalFiles} files for upload`);
-    
-    // Use Zustand for large uploads (1000+ files)
-    const useZustandStorage = totalFiles >= 1000;
-    console.log(`[Upload] Using ${useZustandStorage ? 'Zustand' : 'IndexedDB'} storage for ${totalFiles} files`);
+    console.log(`[Upload] Selected ${totalFiles} files`);
 
-    // Show warning for large uploads
-    if (totalFiles > 1000) {
-      const confirmUpload = window.confirm(
-        `WARNING: You are about to upload ${totalFiles.toLocaleString()} files.\n\n` +
-        `This may take a long time and could use a lot of memory.\n\n` +
-        `Are you sure you want to continue?`
-      );
-      if (!confirmUpload) {
+    // ─── Strategy decision ─────────────────────────────────────────────
+    const DIRECT_LIMIT = 500;
+    const BATCH_SIZE = 500;        // INCREASED: match backend limit
+    const CONCURRENCY = 3;         // NEW: parallel batch uploads
+    const MAX_RETRIES = 3;         // NEW: retry failed batches
+    const useBatch = totalFiles > DIRECT_LIMIT;
+
+    if (totalFiles > 5000) {
+      if (!window.confirm(
+        `You selected ${totalFiles.toLocaleString()} files.\n\n` +
+        `This will be uploaded in batches of ${BATCH_SIZE} (${Math.ceil(totalFiles / BATCH_SIZE)} batches) to the server.\n` +
+        `It may take several minutes. Continue?`
+      )) {
         e.target.value = '';
         return;
       }
@@ -605,162 +604,257 @@ export default function FileExplorer() {
     setImportProgress({ current: 0, total: totalFiles });
 
     try {
-      // Use FormData to send to backend
-      const formData = new FormData();
-      
-      console.log('[Upload] Building FormData...');
-      
-      // Add all files to FormData with their relative paths
-      for (let i = 0; i < fileArray.length; i++) {
-        const file = fileArray[i];
-        const path = (file as any).webkitRelativePath || file.name;
-        formData.append('files', file, path);
-        
-        if (i % 100 === 0) {
-          setImportProgress({ current: i + 1, total: totalFiles });
-          await new Promise(r => setTimeout(r, 0));
-        }
-      }
-
-      console.log(`[Upload] Sending ${totalFiles} files to backend API...`);
-
-      // Send to backend API
-      const response = await fetch('http://localhost:5002/api/upload/folder', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = 'Upload failed';
-        try {
-          const errorJson = JSON.parse(errorText);
-          errorMessage = errorJson.error || errorMessage;
-        } catch {
-          errorMessage = errorText || errorMessage;
-        }
-        throw new Error(errorMessage);
-      }
-
-      const result = await response.json();
-      console.log('[Upload] Backend response:', result);
-
-      // Process the returned files
-      if (result.success && result.files) {
-        let savedCount = 0;
+      // ─── Direct IndexedDB (small folders ≤500) ─────────────────────
+      if (!useBatch) {
         const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'ico', 'bmp']);
-        
-        console.log(`[Upload] Saving ${result.files.length} files to ${useZustandStorage ? 'Zustand' : 'IndexedDB'}...`);
+        const folderPaths = new Set<string>();
+        let savedCount = 0;
+        const BATCH_UPDATE = 50;
+        let batchFiles: Record<string, string> = {};
 
-        if (useZustandStorage) {
-          // ZUSTAND STORAGE - For large file uploads (1000+ files)
-          const zustandFiles: Record<string, string> = {};
-          const folderPaths = new Set<string>();
+        for (let i = 0; i < fileArray.length; i++) {
+          const file = fileArray[i];
+          const path = (file as any).webkitRelativePath || file.name;
+          const ext = path.split('.').pop()?.toLowerCase() || '';
+          const isImage = imageExts.has(ext);
+
+          // Track folders
+          const parts = path.split('/');
+          let folderPath = '';
+          for (let j = 0; j < parts.length - 1; j++) {
+            folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
+            folderPaths.add(folderPath);
+          }
+
+          // Save to IndexedDB
+          if (isImage) {
+            await saveBlob(path, file);
+            batchFiles[path] = '';
+          } else {
+            const content = await file.text();
+            await saveContent(path, content);
+            batchFiles[path] = content;
+          }
+
+          savedCount++;
+          setImportProgress({ current: savedCount, total: totalFiles });
+
+          // Batch update Zustand
+          if (savedCount % BATCH_UPDATE === 0 || savedCount === totalFiles) {
+            const currentFiles = useWorkspaceStore.getState().files;
+            const currentFolders = useWorkspaceStore.getState().folders;
+            const mergedFiles = { ...currentFiles, ...batchFiles };
+            const mergedFolders = [...currentFolders];
+            for (const folder of folderPaths) {
+              if (!mergedFolders.includes(folder)) {
+                mergedFolders.push(folder);
+              }
+            }
+            useWorkspaceStore.setState({
+              files: mergedFiles,
+              folders: mergedFolders,
+            });
+            batchFiles = {};
+            await new Promise(r => setTimeout(r, 0));
+          }
+        }
+
+        showToast(`Successfully uploaded ${savedCount} files`, 'success');
+        return;
+      }
+
+      // ─── Backend batch upload (large folders) ──────────────────
+      const API_BASE = 'http://localhost:5002/api';
+      const batches: File[][] = [];
+      for (let i = 0; i < totalFiles; i += BATCH_SIZE) {
+        batches.push(fileArray.slice(i, i + BATCH_SIZE));
+      }
+
+      let uploadedCount = 0;
+      let allFileData: any[] = [];
+      const folderPaths = new Set<string>();
+
+      // ─── NEW: Upload with concurrency & retry ─────────────────
+      const uploadBatchWithRetry = async (batch: File[], batchIndex: number, attempt = 1): Promise<any[]> => {
+        const formData = new FormData();
+        batch.forEach(file => formData.append('files', file));
+        formData.append('batchNumber', String(batchIndex + 1));
+        formData.append('totalBatches', String(batches.length));
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout per batch
+
+          const response = await fetch(`${API_BASE}/upload/folder-batch`, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Batch ${batchIndex + 1} failed (${response.status}): ${errorText || response.statusText}`);
+          }
+
+          const result = await response.json();
+          if (!result.success) {
+            throw new Error(`Batch ${batchIndex + 1} returned success: false`);
+          }
+
+          return result.files || [];
+        } catch (error) {
+          if (attempt < MAX_RETRIES) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // Exponential backoff, max 10s
+            console.warn(`[Upload] Batch ${batchIndex + 1} failed, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})...`);
+            await new Promise(r => setTimeout(r, delay));
+            return uploadBatchWithRetry(batch, batchIndex, attempt + 1);
+          }
+          throw error;
+        }
+      };
+
+      // ─── NEW: Process batches with limited concurrency ─────────
+      const processQueue = async () => {
+        let batchIndex = 0;
+        const running: Promise<void>[] = [];
+
+        const runBatch = async (index: number) => {
+          const batch = batches[index];
+          const files = await uploadBatchWithRetry(batch, index);
           
-          for (const fileData of result.files) {
+          allFileData = allFileData.concat(files);
+          
+          // Collect folder paths
+          files.forEach((fileData: any) => {
             const path = fileData.filename;
-            
-            // Track folders
             const parts = path.split('/');
             let folderPath = '';
             for (let j = 0; j < parts.length - 1; j++) {
               folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
               folderPaths.add(folderPath);
             }
-            
-            // Store file content in Zustand
-            if (fileData.content) {
-              zustandFiles[path] = fileData.content;
-            } else {
-              zustandFiles[path] = '';
-            }
-            
-            savedCount++;
-            if (savedCount % 100 === 0) {
-              setImportProgress({ current: savedCount, total: totalFiles });
-              await new Promise(r => setTimeout(r, 0));
-            }
-          }
-          
-          // Update Zustand store in batch
-          const currentFiles = useWorkspaceStore.getState().files;
-          const currentFolders = useWorkspaceStore.getState().folders;
-          
-          // Merge files
-          const mergedFiles = { ...currentFiles };
-          for (const [path, content] of Object.entries(zustandFiles)) {
-            mergedFiles[path] = content;
-          }
-          
-          // Merge folders
-          const mergedFolders = [...currentFolders];
-          for (const folder of folderPaths) {
-            if (!mergedFolders.includes(folder)) {
-              mergedFolders.push(folder);
-            }
-          }
-          
-          // Batch update Zustand store
-          useWorkspaceStore.setState({
-            files: mergedFiles,
-            folders: mergedFolders,
           });
-          
-          console.log(`[Upload] Added ${Object.keys(zustandFiles).length} files to Zustand store`);
-          console.log(`[Upload] Added ${folderPaths.size} folders to Zustand store`);
-          
-        } else {
-          // INDEXEDDB STORAGE - For small file uploads (< 1000 files)
-          for (const fileData of result.files) {
-            const path = fileData.filename;
-            const ext = path.split('.').pop()?.toLowerCase() || '';
-            const isImage = imageExts.has(ext);
-            
-            // Track folders
-            const parts = path.split('/');
-            let folderPath = '';
-            for (let j = 0; j < parts.length - 1; j++) {
-              folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
-              if (!folders.includes(folderPath)) {
-                createFolder(folderPath);
-              }
-            }
-            
-            // Save to IndexedDB
-            if (isImage) {
-              const originalFile = fileArray.find(f => {
-                const fPath = (f as any).webkitRelativePath || f.name;
-                return fPath === path;
-              });
-              if (originalFile) {
-                await saveBlob(path, originalFile);
-              }
-            } else if (fileData.content) {
-              await saveContent(path, fileData.content);
-              updateFile(path, fileData.content);
-            }
-            
-            savedCount++;
-            if (savedCount % 50 === 0) {
-              setImportProgress({ current: savedCount, total: totalFiles });
-              await new Promise(r => setTimeout(r, 0));
-            }
+
+          uploadedCount += batch.length;
+          setImportProgress({ current: uploadedCount, total: totalFiles });
+        };
+
+        while (batchIndex < batches.length || running.length > 0) {
+          // Start new batches up to concurrency limit
+          while (running.length < CONCURRENCY && batchIndex < batches.length) {
+            const currentIndex = batchIndex++;
+            const promise = runBatch(currentIndex).finally(() => {
+              const idx = running.indexOf(promise as any);
+              if (idx > -1) running.splice(idx, 1);
+            });
+            running.push(promise as any);
+          }
+
+          // Wait for at least one to finish before starting more
+          if (running.length > 0) {
+            await Promise.race(running);
           }
         }
-        
-        showToast(`Successfully uploaded ${result.count || result.files.length} files`, 'success');
-      } else {
-        throw new Error('Upload failed: Invalid response from server');
+      };
+
+      await processQueue();
+
+      // ─── Merge all files into Zustand ────────────────────────────
+      const zustandFiles: Record<string, string> = {};
+      for (const fileData of allFileData) {
+        zustandFiles[fileData.filename] = fileData.content || '';
       }
+
+      const currentFiles = useWorkspaceStore.getState().files;
+      const currentFolders = useWorkspaceStore.getState().folders;
+      useWorkspaceStore.setState({
+        files: { ...currentFiles, ...zustandFiles },
+        folders: [...new Set([...currentFolders, ...folderPaths])],
+      });
+
+      showToast(`Uploaded ${uploadedCount} files in ${batches.length} batches`, 'success');
     } catch (error) {
-      console.error('[Upload] Failed:', error);
+      console.error('[Upload] Error:', error);
       showToast(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
     } finally {
       setImporting(false);
       setImportProgress({ current: 0, total: 0 });
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [folders, createFolder, updateFile, showToast]);
+  }, [showToast]);
+
+    // ─── ZIP UPLOAD (uses backend) ──────────────────────────────────
+    const handleZipUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const fileList = e.target.files;
+      if (!fileList || fileList.length === 0) return;
+      const file = fileList[0];
+      if (!file.name.endsWith('.zip')) {
+        showToast('Please select a .zip file', 'error');
+        e.target.value = '';
+        return;
+      }
+
+      setImporting(true);
+      setImportProgress({ current: 0, total: 1 });
+
+      try {
+        const formData = new FormData();
+        formData.append('zip', file);
+        const response = await fetch('http://localhost:5002/api/upload/zip', {
+          method: 'POST',
+          body: formData,
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(errorText || 'ZIP upload failed');
+        }
+        const result = await response.json();
+        if (result.success && result.files) {
+          const entries = Object.entries(result.files);
+          const total = entries.length;
+          setImportProgress({ current: 0, total });
+
+          const zustandFiles: Record<string, string> = {};
+          const folderPaths = new Set<string>();
+
+          for (let i = 0; i < entries.length; i++) {
+            const [path, content] = entries[i];
+            zustandFiles[path] = content as string;
+            const parts = path.split('/');
+            let folderPath = '';
+            for (let j = 0; j < parts.length - 1; j++) {
+              folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
+              folderPaths.add(folderPath);
+            }
+            if (i % 50 === 0) {
+              setImportProgress({ current: i, total });
+              await new Promise(r => setTimeout(r, 0));
+            }
+          }
+
+          const currentFiles = useWorkspaceStore.getState().files;
+          const currentFolders = useWorkspaceStore.getState().folders;
+          useWorkspaceStore.setState({
+            files: { ...currentFiles, ...zustandFiles },
+            folders: [...currentFolders, ...folderPaths],
+          });
+
+          setImportProgress({ current: total, total });
+          showToast(`Extracted ${total} files from ZIP`, 'success');
+        } else {
+          throw new Error('Invalid response from server');
+        }
+      } catch (error) {
+        console.error('[Upload] ZIP error:', error);
+        showToast(`ZIP upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+      } finally {
+        setImporting(false);
+        setImportProgress({ current: 0, total: 0 });
+        if (zipInputRef.current) zipInputRef.current.value = '';
+      }
+    }, [showToast]);
 
   const toggleSettings = useCallback(() => window.dispatchEvent(new CustomEvent('toggle-settings')), []);
   const toggleAccount = useCallback(() => window.dispatchEvent(new CustomEvent('toggle-account')), []);
@@ -800,6 +894,15 @@ export default function FileExplorer() {
             <Upload className={`w-3.5 h-3.5 ${importing ? 'text-[#58a6ff] animate-pulse' : 'text-[#8b949e] hover:text-[#c9d1d9]'}`} />
           </button>
 
+          <button
+            onClick={() => zipInputRef.current?.click()}
+            className="p-1 hover:bg-[#30363d] rounded transition"
+            title="Upload ZIP"
+            disabled={importing}
+          >
+            <FileArchive className={`w-3.5 h-3.5 ${importing ? 'text-[#58a6ff] animate-pulse' : 'text-[#8b949e] hover:text-[#c9d1d9]'}`} />
+          </button>
+
           <button onClick={() => startCreateFile()} className="p-1 hover:bg-[#30363d] rounded transition" title="New File">
             <FilePlus className="w-3.5 h-3.5 text-[#8b949e] hover:text-[#c9d1d9]" />
           </button>
@@ -818,13 +921,20 @@ export default function FileExplorer() {
         className="hidden"
         onChange={handleImport}
       />
+      <input
+        ref={zipInputRef}
+        type="file"
+        accept=".zip"
+        className="hidden"
+        onChange={handleZipUpload}
+      />
 
       {importing && (
         <div className="px-3 py-2 bg-[#1f6feb]/10 border-b border-[#30363d] shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 border-2 border-[#58a6ff] border-t-transparent rounded-full animate-spin" />
             <span className="text-[10px] text-[#58a6ff]">
-              Importing {importProgress.current} / {importProgress.total}...
+              {importProgress.total === 0 ? 'Processing...' : `Importing ${importProgress.current} / ${importProgress.total}`}
             </span>
           </div>
           <div className="w-full h-1 bg-[#21262d] rounded-full mt-1 overflow-hidden">
@@ -956,6 +1066,12 @@ export default function FileExplorer() {
                   className="flex items-center gap-2 px-4 py-2 bg-[#21262d] hover:bg-[#30363d] rounded-md text-[11px] text-[#c9d1d9] transition border border-[#30363d]"
                 >
                   <Upload className="w-4 h-4 text-[#58a6ff]" /> Import Folder
+                </button>
+                <button
+                  onClick={() => zipInputRef.current?.click()}
+                  className="flex items-center gap-2 px-4 py-2 bg-[#21262d] hover:bg-[#30363d] rounded-md text-[11px] text-[#c9d1d9] transition border border-[#30363d]"
+                >
+                  <FileArchive className="w-4 h-4 text-[#e3b341]" /> Upload ZIP
                 </button>
                 <button
                   onClick={() => startCreateFolder()}

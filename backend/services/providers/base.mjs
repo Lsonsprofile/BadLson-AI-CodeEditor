@@ -1,13 +1,4 @@
-// backend/services/providers/base.ts
-
-import type {
-  AIProvider,
-  AIProviderClient,
-  AIProviderRequest,
-  AIProviderResponse,
-  AIProviderError,
-  AIStreamChunk,
-} from '../types';
+// backend/services/providers/base.mjs
 
 /**
  * Base class for all AI providers.
@@ -24,36 +15,40 @@ import type {
  * - Response mapping
  * - Streaming implementation
  */
-export abstract class BaseAIProvider implements AIProviderClient {
+export class BaseAIProvider {
   /**
    * Provider identifier.
+   * Must be overridden by subclasses.
    */
-  abstract readonly provider: AIProvider;
+  get provider() {
+    throw new Error('Provider must override the provider getter');
+  }
 
   /**
    * Send a non-streaming request.
+   * Must be overridden by subclasses.
    */
-  abstract send(
-    request: AIProviderRequest
-  ): Promise<AIProviderResponse>;
+  async send(request) {
+    throw new Error('Provider must implement send()');
+  }
 
   /**
    * Send a streaming request.
+   * Must be overridden by subclasses.
    */
-  abstract stream(
-    request: AIProviderRequest,
-    onChunk: (chunk: AIStreamChunk) => void
-  ): Promise<AIProviderResponse>;
+  async stream(request, onChunk) {
+    throw new Error('Provider must implement stream()');
+  }
 
   /**
    * Validate a request before sending it.
    */
-  protected validateRequest(request: AIProviderRequest): void {
+  validateRequest(request) {
     if (!request.model) {
       throw new Error('AI model is required.');
     }
 
-    if (request.messages.length === 0) {
+    if (!request.messages || request.messages.length === 0) {
       throw new Error('At least one message is required.');
     }
   }
@@ -61,7 +56,7 @@ export abstract class BaseAIProvider implements AIProviderClient {
   /**
    * Build standard JSON headers.
    */
-  protected createHeaders(apiKey: string): HeadersInit {
+  createHeaders(apiKey) {
     return {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
@@ -71,22 +66,19 @@ export abstract class BaseAIProvider implements AIProviderClient {
   /**
    * Parse a JSON response safely.
    */
-  protected async parseJson<T>(response: Response): Promise<T> {
+  async parseJson(response) {
     if (!response.ok) {
       const text = await response.text();
-
-      throw new Error(
-        text || `HTTP ${response.status} ${response.statusText}`
-      );
+      throw new Error(text || `HTTP ${response.status} ${response.statusText}`);
     }
 
-    return response.json() as Promise<T>;
+    return response.json();
   }
 
   /**
    * Normalize provider-specific errors.
    */
-  protected normalizeError(error: unknown): AIProviderError {
+  normalizeError(error) {
     if (error instanceof Error) {
       return {
         provider: this.provider,
@@ -104,10 +96,7 @@ export abstract class BaseAIProvider implements AIProviderClient {
    * Wrap provider calls with consistent validation
    * and error normalization.
    */
-  protected async execute<T>(
-    request: AIProviderRequest,
-    operation: () => Promise<T>
-  ): Promise<T> {
+  async execute(request, operation) {
     this.validateRequest(request);
 
     try {

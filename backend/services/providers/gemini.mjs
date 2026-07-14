@@ -1,72 +1,4 @@
-// src/ai/providers/gemini.ts
-
-import type { AIMessage } from '@/store/ai/ai.types';
-import type {
-  AIProviderRequest,
-  AIProviderResponse,
-  AIStreamChunk,
-  AIProviderClient,
-  AIUsage,
-} from '@/ai/types';
-import type { AIProviderSettings } from '@/ai/config';
-
-interface GeminiPart {
-  text: string;
-}
-
-interface GeminiContent {
-  role: 'user' | 'model';
-  parts: GeminiPart[];
-}
-
-interface GeminiRequest {
-  contents: GeminiContent[];
-  generationConfig?: {
-    temperature?: number;
-    maxOutputTokens?: number;
-    topP?: number;
-  };
-  systemInstruction?: {
-    parts: [{ text: string }];
-  };
-}
-
-interface GeminiResponse {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string }>;
-    };
-    finishReason?: string;
-  }>;
-  usageMetadata?: {
-    promptTokenCount?: number;
-    candidatesTokenCount?: number;
-    totalTokenCount?: number;
-  };
-}
-
-interface GeminiStreamChunk {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string }>;
-    };
-    finishReason?: string;
-  }>;
-  usageMetadata?: {
-    promptTokenCount?: number;
-    candidatesTokenCount?: number;
-    totalTokenCount?: number;
-  };
-}
-
-// Gemini model capabilities (max output tokens, context)
-const GEMINI_MODEL_CAPABILITIES: Record<string, { maxOutput: number; context: number }> = {
-  'gemini-2.5-pro': { maxOutput: 8192, context: 1048576 },
-  'gemini-2.5-flash': { maxOutput: 8192, context: 1048576 },
-  'gemini-2.0-flash': { maxOutput: 8192, context: 1048576 },
-  'gemini-1.5-pro': { maxOutput: 8192, context: 2097152 },
-  'gemini-1.5-flash': { maxOutput: 8192, context: 1048576 },
-};
+// backend/services/providers/gemini.mjs
 
 const DEFAULT_SYSTEM_PROMPT = `You are an expert coding assistant integrated into a code editor. Follow these rules strictly:
 - Respond in Markdown format.
@@ -78,44 +10,47 @@ const DEFAULT_SYSTEM_PROMPT = `You are an expert coding assistant integrated int
 - Never invent code that is not present in the context.
 - If the prompt exceeds the model's context window, inform the user and suggest shortening the input.`;
 
-export class GeminiProvider implements AIProviderClient {
-  readonly provider = 'gemini' as const;
+const GEMINI_MODEL_CAPABILITIES = {
+  'gemini-2.5-pro': { maxOutput: 8192, context: 1048576 },
+  'gemini-2.5-flash': { maxOutput: 8192, context: 1048576 },
+  'gemini-2.0-flash': { maxOutput: 8192, context: 1048576 },
+  'gemini-1.5-pro': { maxOutput: 8192, context: 2097152 },
+  'gemini-1.5-flash': { maxOutput: 8192, context: 1048576 },
+};
 
-  private readonly config: AIProviderSettings;
-  private readonly systemPrompt: string;
-
-  constructor(config: AIProviderSettings, systemPrompt?: string) {
+export class GeminiProvider {
+  constructor(config, systemPrompt) {
     this.config = config;
     this.systemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
   }
 
-  private get apiKey(): string {
-    const key = this.config.apiKey?.trim();
+  get provider() {
+    return 'gemini';
+  }
 
+  get apiKey() {
+    const key = this.config.apiKey?.trim();
     if (!key) {
       throw new Error('Gemini API key is not configured');
     }
-
     return key;
   }
 
-  private createBody(request: AIProviderRequest): GeminiRequest {
+  createBody(request) {
     // Add system instruction if not present
-    let systemInstruction: { parts: [{ text: string }] } | undefined;
+    let systemInstruction = undefined;
     const hasSystem = request.messages.some((m) => m.role === 'system');
     if (!hasSystem) {
       systemInstruction = { parts: [{ text: this.systemPrompt }] };
     }
 
-    // ✅ FIX: Explicitly cast role to 'user' | 'model'
     const contents = request.messages
       .filter((m) => m.role !== 'system')
       .map((message) => ({
-        role: (message.role === 'assistant' ? 'model' : 'user') as 'user' | 'model',
+        role: message.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: message.content }],
       }));
 
-    // Sanitize maxTokens
     let maxOutputTokens = request.maxTokens;
     if (maxOutputTokens === undefined || maxOutputTokens < 1) {
       maxOutputTokens = 4096;
@@ -136,9 +71,7 @@ export class GeminiProvider implements AIProviderClient {
     };
   }
 
-  private normalizeUsage(
-    usage?: GeminiStreamChunk['usageMetadata']
-  ): AIUsage | undefined {
+  normalizeUsage(usage) {
     if (!usage) return undefined;
     return {
       promptTokens: usage.promptTokenCount ?? 0,
@@ -147,28 +80,19 @@ export class GeminiProvider implements AIProviderClient {
     };
   }
 
-  private buildUrl(stream: boolean, model: string): string {
+  buildUrl(stream, model) {
     const action = stream ? 'streamGenerateContent' : 'generateContent';
     const query = stream ? '&alt=sse' : '';
     return `${this.config.baseUrl}/models/${model}:${action}?key=${this.apiKey}${query}`;
   }
 
-  private processSseLine(
-    line: string,
-    state: {
-      complete: string;
-      finishReason?: string;
-      usage?: AIUsage;
-    },
-    onChunk: (chunk: AIStreamChunk) => void,
-    requestId: string
-  ): void {
+  processSseLine(line, state, onChunk, requestId) {
     if (!line.startsWith('data:')) return;
     const payload = line.replace(/^data:\s*/, '');
     if (payload === '[DONE]') return;
 
     try {
-      const parsed = JSON.parse(payload) as GeminiStreamChunk;
+      const parsed = JSON.parse(payload);
 
       state.usage = this.normalizeUsage(parsed.usageMetadata) ?? state.usage;
 
@@ -190,7 +114,7 @@ export class GeminiProvider implements AIProviderClient {
     }
   }
 
-  private handleError(response: Response, text: string): never {
+  handleError(response, text) {
     let message = `Gemini API error (${response.status})`;
     switch (response.status) {
       case 401:
@@ -212,11 +136,7 @@ export class GeminiProvider implements AIProviderClient {
     throw new Error(message);
   }
 
-  private async fetchWithTimeout(
-    url: string,
-    options: RequestInit,
-    timeoutMs: number = 60000
-  ): Promise<Response> {
+  async fetchWithTimeout(url, options, timeoutMs = 60000) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -235,7 +155,7 @@ export class GeminiProvider implements AIProviderClient {
     }
   }
 
-  async send(request: AIProviderRequest): Promise<AIProviderResponse> {
+  async send(request) {
     const response = await this.fetchWithTimeout(
       this.buildUrl(false, request.model),
       {
@@ -251,7 +171,7 @@ export class GeminiProvider implements AIProviderClient {
       this.handleError(response, errorText);
     }
 
-    const data = (await response.json()) as GeminiResponse;
+    const data = await response.json();
     const candidate = data.candidates?.[0];
     const content =
       candidate?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
@@ -275,10 +195,7 @@ export class GeminiProvider implements AIProviderClient {
     };
   }
 
-  async stream(
-    request: AIProviderRequest,
-    onChunk: (chunk: AIStreamChunk) => void
-  ): Promise<AIProviderResponse> {
+  async stream(request, onChunk) {
     const streamId = crypto.randomUUID();
 
     const response = await this.fetchWithTimeout(
@@ -296,14 +213,14 @@ export class GeminiProvider implements AIProviderClient {
       this.handleError(response, error);
     }
 
-    const reader = response.body!.getReader();
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
     let buffer = '';
     const state = {
       complete: '',
-      finishReason: undefined as string | undefined,
-      usage: undefined as AIUsage | undefined,
+      finishReason: undefined,
+      usage: undefined,
     };
 
     try {
