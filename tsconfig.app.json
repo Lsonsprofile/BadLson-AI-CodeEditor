@@ -29,5 +29,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": false
   },
-  "include": ["src", "backend/services/providers"]
+  "include": ["src", "backend/services/providers", "src/ai/types.ts"]
 }

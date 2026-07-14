@@ -1,8 +1,7 @@
-// src/ai/providers/base.ts
-
-import type { AIProvider } from '@/store/ai/ai.types';
+// backend/services/providers/base.ts
 
 import type {
+  AIProvider,
   AIProviderClient,
   AIProviderRequest,
   AIProviderResponse,
