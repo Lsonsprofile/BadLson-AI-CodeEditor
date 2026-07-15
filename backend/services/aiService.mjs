@@ -408,16 +408,18 @@ async function callOpenRouter(messages, preferredModel = null) {
   throw lastError || new Error('All OpenRouter models failed');
 }
 
+// ─── OPENROUTER STREAMING (HARDENED) ──────────────────────────────
 async function streamOpenRouter(messages, onChunk, preferredModel = null) {
   if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
 
   const freeModels = await fetchOpenRouterFreeModels();
-  const modelsToTry = preferredModel 
+  const modelsToTry = preferredModel
     ? [preferredModel, ...freeModels.filter(m => m !== preferredModel)]
     : freeModels;
 
   let lastError;
   for (const model of modelsToTry) {
+    console.log(`[AI Service] Trying OpenRouter model: ${model}`);
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000);
@@ -445,11 +447,12 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        if ([429, 503, 404].includes(response.status)) {
-          lastError = new Error(`OpenRouter ${model}: ${errorText}`);
+        console.warn(`[AI Service] OpenRouter ${model} HTTP ${response.status}: ${errorText.substring(0, 200)}`);
+        if ([429, 503, 404, 402].includes(response.status)) {
+          lastError = new Error(`OpenRouter ${model}: ${errorText.substring(0, 200)}`);
           continue;
         }
-        throw new Error(`OpenRouter streaming error ${response.status}: ${errorText}`);
+        throw new Error(`OpenRouter streaming error ${response.status}: ${errorText.substring(0, 500)}`);
       }
 
       const reader = response.body.getReader();
@@ -462,7 +465,7 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
+        const chunk = decoder.decode(value, { stream: true });
         const lines = chunk.split('\n').filter(line => line.trim().startsWith('data:'));
 
         for (const line of lines) {
@@ -472,13 +475,22 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
           try {
             const parsed = JSON.parse(data);
             if (parsed.model) actualModel = parsed.model;
+
+            // Handle OpenRouter error objects inside stream
+            if (parsed.error) {
+              throw new Error(`OpenRouter stream error: ${JSON.stringify(parsed.error)}`);
+            }
+
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               fullText += content;
               chunkReceived = true;
               if (onChunk) onChunk(content);
             }
-          } catch { /* skip invalid JSON */ }
+          } catch (parseErr) {
+            if (parseErr.message?.includes('OpenRouter stream error')) throw parseErr;
+            // Skip invalid JSON lines
+          }
         }
       }
 
@@ -493,16 +505,53 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
       };
     } catch (error) {
       if (error.name === 'AbortError') {
-        console.warn(`OpenRouter stream timed out for model ${model}`);
+        console.warn(`[AI Service] OpenRouter stream timed out for model ${model}`);
         lastError = new Error(`Timeout waiting for OpenRouter model ${model}`);
       } else {
-        console.warn(`OpenRouter stream model ${model} failed:`, error.message);
+        console.warn(`[AI Service] OpenRouter stream model ${model} failed:`, error.message);
         lastError = error;
       }
     }
   }
 
   throw lastError || new Error('All OpenRouter stream models failed');
+}
+
+// ─── STREAM WITH FALLBACK (HARDENED) ──────────────────────────────
+export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null) {
+  const providers = [];
+  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
+  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
+  if (preferredProvider === 'gemini' && GEMINI_API_KEY) providers.push('gemini');
+
+  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
+  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
+  if (GEMINI_API_KEY && !providers.includes('gemini')) providers.push('gemini');
+
+  if (providers.length === 0) {
+    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.');
+  }
+
+  console.log(`[AI Service] streamWithFallback | providers=[${providers.join(', ')}] | preferredModel=${preferredModel || 'auto'}`);
+
+  let lastError;
+  for (const provider of providers) {
+    try {
+      console.log(`[AI Service] Trying provider: ${provider}`);
+      let result;
+      if (provider === 'openrouter') result = await streamOpenRouter(messages, onChunk, preferredModel);
+      else if (provider === 'groq') result = await streamGroq(messages, onChunk);
+      else if (provider === 'gemini') result = await streamGemini(messages, onChunk, preferredModel);
+
+      console.log(`[AI Service] Provider ${provider} succeeded | model=${result.model} | contentLength=${result.content?.length || 0}`);
+      return result;
+    } catch (error) {
+      console.warn(`[AI Service] Provider ${provider} stream failed:`, error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('All AI provider streams failed');
 }
 
 // ─── GROQ ─────────────────────────────────────────────────────────

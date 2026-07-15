@@ -10,56 +10,47 @@ import { getAvailableModels } from '../services/aiService.mjs';
 
 const router = express.Router();
 
-// ─── ASYNC ERROR WRAPPER ────────────────────────────────────────────
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
-// ─── SSE FLUSH HELPERS ─────────────────────────────────────────────
 function sseWrite(res, data) {
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
-  if (res.flush) res.flush();
+  if (res.writableEnded || res.destroyed) return false;
+  try {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (res.flush) res.flush();
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 function sseComment(res, comment) {
-  res.write(`:${comment}\n\n`);
-  if (res.flush) res.flush();
+  if (res.writableEnded || res.destroyed) return false;
+  try {
+    res.write(`:${comment}\n\n`);
+    if (res.flush) res.flush();
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
-// ─── DEBUG LOGGING MIDDLEWARE ───────────────────────────────────────
+// ─── DEBUG LOGGING ─────────────────────────────────────────────────
 router.use((req, res, next) => {
-  if (req.method === 'POST' && req.path !== '/stream') {
+  if (req.method === 'POST') {
     const fileCount = req.body?.projectFiles ? Object.keys(req.body.projectFiles).length : 0;
-    const fileNames = fileCount > 0
-      ? Object.keys(req.body.projectFiles).slice(0, 5).join(', ') + (fileCount > 5 ? `... (+${fileCount - 5} more)` : '')
-      : 'none';
-
-    console.log(`[AI Route] ${req.method} ${req.path} | Provider: ${req.body?.provider || 'default'} | Files: ${fileCount} (${fileNames})`);
+    console.log(`[AI Route] ${req.method} ${req.path} | Provider: ${req.body?.provider || 'default'} | Files: ${fileCount}`);
   }
   next();
 });
 
-// ─── POST /api/ai/chat ──────────────────────────────────────────────
+// ─── POST /api/ai/chat ─────────────────────────────────────────────
 router.post('/chat', asyncHandler(async (req, res) => {
-  const {
-    message,
-    projectFiles,
-    chatHistory,
-    provider,
-    activeFile,
-    recentFiles,
-    consoleErrors,
-    buildErrors,
-    selectedCode,
-    cursorPosition,
-    preferredModel,
-  } = req.body;
+  const { message, projectFiles, chatHistory, provider, activeFile, recentFiles, consoleErrors, buildErrors, selectedCode, cursorPosition, preferredModel } = req.body;
 
   if (!message || typeof message !== 'string') {
-    return res.status(400).json({
-      success: false,
-      error: 'Message is required and must be a string',
-    });
+    return res.status(400).json({ success: false, error: 'Message is required and must be a string' });
   }
 
   const response = await handleChat({
@@ -89,52 +80,40 @@ router.post('/chat', asyncHandler(async (req, res) => {
 
 // ─── POST /api/ai/stream ───────────────────────────────────────────
 router.post('/stream', asyncHandler(async (req, res) => {
-  const {
-    message,
-    projectFiles,
-    chatHistory,
-    provider,
-    activeFile,
-    recentFiles,
-    consoleErrors,
-    buildErrors,
-    selectedCode,
-    cursorPosition,
-    preferredModel,
-  } = req.body;
+  const { message, projectFiles, chatHistory, provider, activeFile, recentFiles, consoleErrors, buildErrors, selectedCode, cursorPosition, preferredModel } = req.body;
+
+  // ─── SET SSE HEADERS IMMEDIATELY ────────────────────────────────
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.status(200);
+
+  // Flush headers immediately so client knows connection is alive
+  res.flushHeaders?.();
 
   if (!message || typeof message !== 'string') {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
     sseWrite(res, { type: 'error', error: 'Message is required and must be a string' });
     res.end();
     return;
   }
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',
-    'X-Content-Type-Options': 'nosniff',
-  });
-
+  // Send initial ping so frontend knows stream is alive
   sseComment(res, 'connected');
 
   let fullResponse = '';
   let metadata = {};
   let isClosed = false;
   let chunkCount = 0;
+  let firstChunkReceived = false;
 
+  // Keep-alive every 10s (Render proxy timeout ~100s)
   const keepAliveInterval = setInterval(() => {
     if (isClosed) return;
-    try {
-      sseComment(res, `keep-alive-${Date.now()}`);
-    } catch (err) {
-      cleanup();
-    }
-  }, 15000);
+    const ok = sseComment(res, `keepalive-${Date.now()}`);
+    if (!ok) cleanup();
+  }, 10000);
 
   function cleanup() {
     if (isClosed) return;
@@ -152,6 +131,16 @@ router.post('/stream', asyncHandler(async (req, res) => {
   req.on('close', onClientClose);
   req.on('abort', onClientClose);
 
+  // Safety timeout: if no chunk in 60s, abort
+  const safetyTimeout = setTimeout(() => {
+    if (!firstChunkReceived && !isClosed) {
+      console.error('[AI Stream] Safety timeout: no chunks received within 60s');
+      sseWrite(res, { type: 'error', error: 'Server timeout: AI provider did not respond within 60 seconds. Try again or switch providers.' });
+      cleanup();
+      if (!res.writableEnded) res.end();
+    }
+  }, 60000);
+
   try {
     await handleStream({
       message,
@@ -167,6 +156,11 @@ router.post('/stream', asyncHandler(async (req, res) => {
       cursorPosition: cursorPosition || null,
       onChunk: (chunk) => {
         if (isClosed) return;
+        if (!firstChunkReceived) {
+          firstChunkReceived = true;
+          clearTimeout(safetyTimeout);
+          console.log('[AI Stream] First chunk received');
+        }
         fullResponse += chunk;
         chunkCount++;
         sseWrite(res, { type: 'chunk', content: chunk, index: chunkCount });
@@ -177,26 +171,35 @@ router.post('/stream', asyncHandler(async (req, res) => {
       },
     });
 
+    clearTimeout(safetyTimeout);
+
     if (!isClosed) {
-      sseWrite(res, {
-        type: 'done',
-        provider: metadata.provider,
-        model: metadata.model,
-        mode: metadata.mode,
-      });
+      if (!firstChunkReceived) {
+        // Stream succeeded but returned zero content
+        console.warn('[AI Stream] Stream completed but no chunks were received');
+        sseWrite(res, { type: 'error', error: 'AI returned empty response. The model may be unavailable or the request was too large.' });
+      } else {
+        sseWrite(res, {
+          type: 'done',
+          provider: metadata.provider,
+          model: metadata.model,
+          mode: metadata.mode,
+        });
+      }
     }
   } catch (error) {
-    console.error('[AI Stream] Error:', error);
+    clearTimeout(safetyTimeout);
+    console.error('[AI Stream] Error:', error.message, error.stack);
     if (!isClosed) {
       sseWrite(res, {
         type: 'error',
-        error: error.message,
+        error: error.message || 'Stream failed',
         code: error.code || 'STREAM_ERROR',
       });
     }
   } finally {
     cleanup();
-    if (!res.writableEnded) {
+    if (!res.writableEnded && !res.destroyed) {
       res.end();
     }
   }
@@ -207,10 +210,7 @@ router.post('/analyze', asyncHandler(async (req, res) => {
   const { projectFiles, provider, activeFile, preferredModel } = req.body;
 
   if (!projectFiles || Object.keys(projectFiles).length === 0) {
-    return res.status(400).json({
-      success: false,
-      error: 'Project files are required for analysis',
-    });
+    return res.status(400).json({ success: false, error: 'Project files are required for analysis' });
   }
 
   const response = await handleAnalyze({
@@ -236,10 +236,7 @@ router.post('/explain', asyncHandler(async (req, res) => {
   const { projectFiles, filename, provider, activeFile, preferredModel } = req.body;
 
   if (!filename || typeof filename !== 'string') {
-    return res.status(400).json({
-      success: false,
-      error: 'Filename is required',
-    });
+    return res.status(400).json({ success: false, error: 'Filename is required' });
   }
 
   const response = await handleExplain({
