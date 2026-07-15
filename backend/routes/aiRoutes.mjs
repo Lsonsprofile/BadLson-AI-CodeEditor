@@ -11,10 +11,21 @@ import { getAvailableModels } from '../services/aiService.mjs';
 const router = express.Router();
 
 // ─── ASYNC ERROR WRAPPER ────────────────────────────────────────────
-// Catches errors in async route handlers without try/catch in every route
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
+
+// ─── SSE FLUSH HELPER ───────────────────────────────────────────────
+// Forces immediate send for SSE events through compression middleware
+function sseWrite(res, data) {
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  if (res.flush) res.flush();
+}
+
+function sseComment(res, comment) {
+  res.write(`:${comment}\n\n`);
+  if (res.flush) res.flush();
+}
 
 // ─── DEBUG LOGGING MIDDLEWARE ───────────────────────────────────────
 router.use((req, res, next) => {
@@ -79,7 +90,7 @@ router.post('/chat', asyncHandler(async (req, res) => {
   });
 }));
 
-// POST /api/ai/stream — Server-Sent Events streaming
+// POST /api/ai/stream — Server-Sent Events streaming with keep-alive
 router.post('/stream', asyncHandler(async (req, res) => {
   const { 
     message, 
@@ -96,19 +107,60 @@ router.post('/stream', asyncHandler(async (req, res) => {
   } = req.body;
 
   if (!message || typeof message !== 'string') {
-    return res.status(400).json({
-      success: false,
-      error: 'Message is required and must be a string',
-    });
+    // For SSE, we must set headers before sending error
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    sseWrite(res, { type: 'error', error: 'Message is required and must be a string' });
+    res.end();
+    return;
   }
 
-  // Set up SSE headers
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
+  // ✅ Set SSE headers with anti-buffering directives
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',           // Disable nginx buffering
+    'X-Content-Type-Options': 'nosniff',
+  });
+
+  // Send initial connection event
+  sseComment(res, 'connected');
 
   let fullResponse = '';
   let metadata = {};
+  let isClosed = false;
+  let chunkCount = 0;
+
+  // ✅ Keep-alive heartbeat every 15 seconds (Render proxy timeout ~100s)
+  const keepAliveInterval = setInterval(() => {
+    if (isClosed) return;
+    try {
+      sseComment(res, `keep-alive-${Date.now()}`);
+    } catch (err) {
+      // Client disconnected
+      cleanup();
+    }
+  }, 15000);
+
+  // ✅ Cleanup function for all exit paths
+  function cleanup() {
+    if (isClosed) return;
+    isClosed = true;
+    clearInterval(keepAliveInterval);
+    req.off('close', onClientClose);
+    req.off('abort', onClientClose);
+    // Don't call res.end() here — let the caller handle it
+  }
+
+  function onClientClose() {
+    console.log('[AI Stream] Client disconnected');
+    cleanup();
+  }
+
+  req.on('close', onClientClose);
+  req.on('abort', onClientClose);
 
   try {
     await handleStream({
@@ -124,26 +176,40 @@ router.post('/stream', asyncHandler(async (req, res) => {
       selectedCode: selectedCode || null,
       cursorPosition: cursorPosition || null,
       onChunk: (chunk) => {
+        if (isClosed) return;
         fullResponse += chunk;
-        res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+        chunkCount++;
+        sseWrite(res, { type: 'chunk', content: chunk, index: chunkCount });
       },
       onComplete: (result) => {
+        if (isClosed) return;
         metadata = result;
       },
     });
 
-    // Send final metadata
-    res.write(`data: ${JSON.stringify({ 
-      type: 'done', 
-      provider: metadata.provider,
-      model: metadata.model,
-      mode: metadata.mode,
-    })}\n\n`);
-    
-    res.end();
+    if (!isClosed) {
+      // Send completion event
+      sseWrite(res, { 
+        type: 'done', 
+        provider: metadata.provider,
+        model: metadata.model,
+        mode: metadata.mode,
+      });
+    }
   } catch (error) {
-    res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
-    res.end();
+    console.error('[AI Stream] Error:', error);
+    if (!isClosed) {
+      sseWrite(res, { 
+        type: 'error', 
+        error: error.message,
+        code: error.code || 'STREAM_ERROR',
+      });
+    }
+  } finally {
+    cleanup();
+    if (!res.writableEnded) {
+      res.end();
+    }
   }
 }));
 

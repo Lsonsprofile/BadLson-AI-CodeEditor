@@ -42,17 +42,15 @@ app.use(helmet({
 }));
 
 // ─── COMPRESSION ──────────────────────────────────────────────────
-app.use(compression());
-
-// ─── REQUEST LOGGING ──────────────────────────────────────────────
-app.use((req, res, next) => {
- const start = Date.now();
- res.on('finish', () => {
-   const duration = Date.now() - start;
-   console.log(`${req.method} ${req.path} ${res.statusCode} ${duration}ms - ${req.ip}`);
- });
- next();
-});
+app.use(compression({
+  filter: (req, res) => {
+    // Don't compress SSE responses — causes buffering
+    if (req.headers['accept'] === 'text/event-stream') {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+}));
 
 // ─── RATE LIMITING ──────────────────────────────────────────────────
 const globalLimiter = rateLimit({
