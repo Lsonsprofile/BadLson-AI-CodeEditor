@@ -3,11 +3,30 @@ import {
   generateCodeResponse, 
   streamCodeResponse, 
   parseAiResponse,
-  applyEdits,
+  // applyEdits,  // ← REMOVED — not exported in deployed version
 } from '../services/aiService.mjs';
 
-// ─── CHAT (non-streaming) ───────────────────────────────────────────
+// ─── MINIMAL INLINE APPLY EDITS (fallback) ─────────────────────────
+function applyEdits(projectFiles, edits, options = {}) {
+  const { activeFile = null } = options;
+  const updatedFiles = { ...projectFiles };
+  const applied = [];
+  const failed = [];
 
+  for (const edit of edits) {
+    const { filename, code } = edit;
+    if (!code || code.length < 5) {
+      failed.push({ filename, reason: 'Empty or too short' });
+      continue;
+    }
+    updatedFiles[filename] = code;
+    applied.push({ filename, type: updatedFiles.hasOwnProperty(filename) ? 'replaced' : 'created' });
+  }
+
+  return { updatedFiles, applied, failed };
+}
+
+// ─── CHAT (non-streaming) ───────────────────────────────────────────
 export async function handleChat(options) {
   const {
     message, projectFiles, chatHistory, provider, preferredModel,
@@ -43,15 +62,11 @@ export async function handleChat(options) {
 }
 
 // ─── STREAM ─────────────────────────────────────────────────────────
-// Pure logic — callbacks let the route handle all HTTP/SSE concerns
-
 export async function handleStream(options) {
   const {
     message, projectFiles, chatHistory, provider, preferredModel,
     activeFile, recentFiles, consoleErrors, buildErrors, selectedCode, cursorPosition,
-    onChunk,      // callback: (chunk: string) => void
-    onComplete,   // callback: (metadata: object) => void
-    onError,      // callback: (error: Error) => void
+    onChunk, onComplete, onError,
   } = options;
 
   let fullText = '';
@@ -88,7 +103,6 @@ export async function handleStream(options) {
 }
 
 // ─── ANALYZE ────────────────────────────────────────────────────────
-
 export async function handleAnalyze(options) {
   const { projectFiles, provider, preferredModel, activeFile } = options;
   const reviewMessage = 'Please review this codebase for bugs, security issues, performance problems, and maintainability concerns. Be thorough and specific.';
@@ -108,7 +122,6 @@ export async function handleAnalyze(options) {
 }
 
 // ─── EXPLAIN ───────────────────────────────────────────────────────
-
 export async function handleExplain(options) {
   const { projectFiles, filename, provider, preferredModel, activeFile } = options;
   const explainMessage = `Please explain the code in file "${filename}". Break down what it does, key functions, and any important patterns or decisions.`;
