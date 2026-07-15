@@ -2,7 +2,12 @@
 import { getContent } from '../lib/fileStorage';
 import { useWorkspaceStore } from '../store/workspaceStore';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
+// ✅ Better fallback: throw if missing in production, use localhost only in dev
+const API_BASE_URL = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL
+  : import.meta.env.DEV
+    ? 'http://localhost:5002/api'
+    : (() => { throw new Error('VITE_API_URL is not defined. Set it in your .env file.'); })();
 
 interface FetchOptions {
   method?: string;

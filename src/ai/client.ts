@@ -5,14 +5,15 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import type {
+  AIProvider,
   AIProviderRequest,
   AIProviderResponse,
   AIStreamChunk,
-  AIProviderError,
 } from "./types";
 import type { AIMessage } from "@/store/ai/ai.types";
 
-const API_BASE = "http://localhost:5002/api/ai";
+// ✅ Standardized: VITE_API_URL is the origin only, we append /api/ai
+const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:5002'}/api/ai`;
 
 // ─── REQUEST ADAPTER ────────────────────────────────────────────────
 // Translates frontend AIProviderRequest → backend expected shape
@@ -56,8 +57,6 @@ function adaptRequest(request: AIProviderRequest): BackendChatRequest {
     provider: request.provider,
     preferredModel: request.model || null,
     chatHistory,
-
-    // ✅ NEW: Forward project context from workspace store
     projectFiles: request.projectFiles,
     folders: request.folders ?? [],
     activeFile: request.activeFile,
@@ -89,7 +88,7 @@ function adaptResponse(backendResponse: BackendChatResponse): AIProviderResponse
 
   return {
     id,
-    provider: backendResponse.provider as "openrouter" | "groq" | "gemini",
+    provider: backendResponse.provider as AIProvider,
     model: backendResponse.model,
     message: {
       id,
@@ -109,7 +108,7 @@ function buildError(
   message: string,
   status?: number,
   code?: string
-): AIProviderError {
+): { provider: string; message: string; code?: string; status?: number } {
   let detailedMessage = message;
 
   if (status === 400) {
@@ -131,7 +130,7 @@ function buildError(
   }
 
   return {
-    provider: provider as "openrouter" | "groq" | "gemini",
+    provider,
     message: detailedMessage,
     code,
     status,
@@ -163,6 +162,7 @@ async function parseSSEStream(
   let buffer = "";
   let fullText = "";
   let metadata: { provider: string; model: string } = { provider: "unknown", model: "unknown" };
+  let chunkId = 0;
 
   try {
     while (true) {
@@ -192,7 +192,7 @@ async function parseSSEStream(
           if (parsed.type === "chunk" && parsed.content) {
             fullText += parsed.content;
             onChunk({
-              id: crypto.randomUUID(),
+              id: `chunk-${chunkId++}`,
               content: parsed.content,
               done: false,
             });
@@ -200,7 +200,7 @@ async function parseSSEStream(
             metadata.provider = parsed.provider ?? metadata.provider;
             metadata.model = parsed.model ?? metadata.model;
             onChunk({
-              id: crypto.randomUUID(),
+              id: `chunk-${chunkId++}`,
               content: "",
               done: true,
             });
@@ -324,7 +324,7 @@ export class AIClient {
 
     return {
       id,
-      provider: provider as "openrouter" | "groq" | "gemini",
+      provider: provider as AIProvider,
       model,
       message: {
         id,

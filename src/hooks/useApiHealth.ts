@@ -24,7 +24,10 @@ export interface UseApiHealthReturn {
 
 export function useApiHealth(options: UseApiHealthOptions = {}): UseApiHealthReturn {
   const {
-    healthUrl = 'http://localhost:5002/api/health',
+    // ✅ Use env var with local fallback
+    healthUrl = import.meta.env.VITE_API_URL
+      ? `${import.meta.env.VITE_API_URL}/api/health`
+      : 'http://localhost:5002/api/health',
     pollingInterval = 30000,
     autoStart = true,
     requestTimeout = 5000,
@@ -36,7 +39,6 @@ export function useApiHealth(options: UseApiHealthOptions = {}): UseApiHealthRet
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [isPolling, setIsPolling] = useState(autoStart);
 
-  // ✅ FIXED: use ReturnType<typeof setTimeout> instead of NodeJS.Timeout
   const pollingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 

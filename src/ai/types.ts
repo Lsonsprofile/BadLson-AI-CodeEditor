@@ -5,6 +5,9 @@
 
 import type { AIMessage, AIProvider } from '@/store/ai/ai.types';
 
+// ✅ RE-EXPORT AIProvider so other files can import it from here
+export type { AIProvider };
+
 /**
  * Generic request sent to any AI provider.
  */
