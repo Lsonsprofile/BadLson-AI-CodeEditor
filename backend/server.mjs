@@ -42,12 +42,10 @@ app.use(helmet({
 }));
 
 // ─── COMPRESSION ──────────────────────────────────────────────────
+// In server.mjs, replace the compression line with:
 app.use(compression({
   filter: (req, res) => {
-    // Don't compress SSE responses — causes buffering
-    if (req.headers['accept'] === 'text/event-stream') {
-      return false;
-    }
+    if (req.headers['accept'] === 'text/event-stream') return false;
     return compression.filter(req, res);
   },
 }));
