@@ -1,10 +1,10 @@
 // backend/routes/aiRoutes.mjs
 import express from 'express';
-import { 
-  handleChat, 
-  handleStream, 
-  handleAnalyze, 
-  handleExplain 
+import {
+  handleChat,
+  handleStream,
+  handleAnalyze,
+  handleExplain,
 } from '../controllers/aiController.mjs';
 import { getAvailableModels } from '../services/aiService.mjs';
 
@@ -15,8 +15,7 @@ const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
-// ─── SSE FLUSH HELPER ───────────────────────────────────────────────
-// Forces immediate send for SSE events through compression middleware
+// ─── SSE FLUSH HELPERS ─────────────────────────────────────────────
 function sseWrite(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
   if (res.flush) res.flush();
@@ -31,23 +30,21 @@ function sseComment(res, comment) {
 router.use((req, res, next) => {
   if (req.method === 'POST' && req.path !== '/stream') {
     const fileCount = req.body?.projectFiles ? Object.keys(req.body.projectFiles).length : 0;
-    const fileNames = fileCount > 0 
+    const fileNames = fileCount > 0
       ? Object.keys(req.body.projectFiles).slice(0, 5).join(', ') + (fileCount > 5 ? `... (+${fileCount - 5} more)` : '')
       : 'none';
-    
+
     console.log(`[AI Route] ${req.method} ${req.path} | Provider: ${req.body?.provider || 'default'} | Files: ${fileCount} (${fileNames})`);
   }
   next();
 });
 
-// ─── ROUTES ─────────────────────────────────────────────────────────
-
-// POST /api/ai/chat — Non-streaming chat with full context
+// ─── POST /api/ai/chat ──────────────────────────────────────────────
 router.post('/chat', asyncHandler(async (req, res) => {
-  const { 
-    message, 
-    projectFiles, 
-    chatHistory, 
+  const {
+    message,
+    projectFiles,
+    chatHistory,
     provider,
     activeFile,
     recentFiles,
@@ -90,12 +87,12 @@ router.post('/chat', asyncHandler(async (req, res) => {
   });
 }));
 
-// POST /api/ai/stream — Server-Sent Events streaming with keep-alive
+// ─── POST /api/ai/stream ───────────────────────────────────────────
 router.post('/stream', asyncHandler(async (req, res) => {
-  const { 
-    message, 
-    projectFiles, 
-    chatHistory, 
+  const {
+    message,
+    projectFiles,
+    chatHistory,
     provider,
     activeFile,
     recentFiles,
@@ -107,7 +104,6 @@ router.post('/stream', asyncHandler(async (req, res) => {
   } = req.body;
 
   if (!message || typeof message !== 'string') {
-    // For SSE, we must set headers before sending error
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -116,16 +112,14 @@ router.post('/stream', asyncHandler(async (req, res) => {
     return;
   }
 
-  // ✅ Set SSE headers with anti-buffering directives
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',           // Disable nginx buffering
+    'X-Accel-Buffering': 'no',
     'X-Content-Type-Options': 'nosniff',
   });
 
-  // Send initial connection event
   sseComment(res, 'connected');
 
   let fullResponse = '';
@@ -133,25 +127,21 @@ router.post('/stream', asyncHandler(async (req, res) => {
   let isClosed = false;
   let chunkCount = 0;
 
-  // ✅ Keep-alive heartbeat every 15 seconds (Render proxy timeout ~100s)
   const keepAliveInterval = setInterval(() => {
     if (isClosed) return;
     try {
       sseComment(res, `keep-alive-${Date.now()}`);
     } catch (err) {
-      // Client disconnected
       cleanup();
     }
   }, 15000);
 
-  // ✅ Cleanup function for all exit paths
   function cleanup() {
     if (isClosed) return;
     isClosed = true;
     clearInterval(keepAliveInterval);
     req.off('close', onClientClose);
     req.off('abort', onClientClose);
-    // Don't call res.end() here — let the caller handle it
   }
 
   function onClientClose() {
@@ -188,9 +178,8 @@ router.post('/stream', asyncHandler(async (req, res) => {
     });
 
     if (!isClosed) {
-      // Send completion event
-      sseWrite(res, { 
-        type: 'done', 
+      sseWrite(res, {
+        type: 'done',
         provider: metadata.provider,
         model: metadata.model,
         mode: metadata.mode,
@@ -199,8 +188,8 @@ router.post('/stream', asyncHandler(async (req, res) => {
   } catch (error) {
     console.error('[AI Stream] Error:', error);
     if (!isClosed) {
-      sseWrite(res, { 
-        type: 'error', 
+      sseWrite(res, {
+        type: 'error',
         error: error.message,
         code: error.code || 'STREAM_ERROR',
       });
@@ -213,7 +202,7 @@ router.post('/stream', asyncHandler(async (req, res) => {
   }
 }));
 
-// POST /api/ai/analyze — Code review mode
+// ─── POST /api/ai/analyze ──────────────────────────────────────────
 router.post('/analyze', asyncHandler(async (req, res) => {
   const { projectFiles, provider, activeFile, preferredModel } = req.body;
 
@@ -242,7 +231,7 @@ router.post('/analyze', asyncHandler(async (req, res) => {
   });
 }));
 
-// POST /api/ai/explain — Explanation mode for specific file
+// ─── POST /api/ai/explain ──────────────────────────────────────────
 router.post('/explain', asyncHandler(async (req, res) => {
   const { projectFiles, filename, provider, activeFile, preferredModel } = req.body;
 
@@ -271,7 +260,7 @@ router.post('/explain', asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/ai/models — Returns available AI models and provider status
+// ─── GET /api/ai/models ────────────────────────────────────────────
 router.get('/models', asyncHandler(async (req, res) => {
   const models = await getAvailableModels();
   res.json({

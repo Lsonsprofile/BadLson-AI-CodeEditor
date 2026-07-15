@@ -1,140 +1,151 @@
 // backend/controllers/aiController.mjs
-import { 
-  generateCodeResponse, 
-  streamCodeResponse, 
+import {
+  buildPrompt,
+  callWithFallback,
+  streamWithFallback,
   parseAiResponse,
-  // applyEdits,  // ← REMOVED — not exported in deployed version
 } from '../services/aiService.mjs';
 
-// ─── MINIMAL INLINE APPLY EDITS (fallback) ─────────────────────────
-function applyEdits(projectFiles, edits, options = {}) {
-  const { activeFile = null } = options;
-  const updatedFiles = { ...projectFiles };
-  const applied = [];
-  const failed = [];
-
-  for (const edit of edits) {
-    const { filename, code } = edit;
-    if (!code || code.length < 5) {
-      failed.push({ filename, reason: 'Empty or too short' });
-      continue;
-    }
-    updatedFiles[filename] = code;
-    applied.push({ filename, type: updatedFiles.hasOwnProperty(filename) ? 'replaced' : 'created' });
-  }
-
-  return { updatedFiles, applied, failed };
-}
-
-// ─── CHAT (non-streaming) ───────────────────────────────────────────
-export async function handleChat(options) {
+// ─── HANDLE CHAT ──────────────────────────────────────────────────
+export async function handleChat(params) {
   const {
-    message, projectFiles, chatHistory, provider, preferredModel,
-    activeFile, recentFiles, consoleErrors, buildErrors, selectedCode, cursorPosition,
-  } = options;
+    message,
+    projectFiles,
+    chatHistory,
+    provider,
+    preferredModel,
+    activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+  } = params;
 
-  const response = await generateCodeResponse(projectFiles, message, {
-    chatHistory, provider, preferredModel, activeFile, recentFiles,
-    consoleErrors, buildErrors, selectedCode, cursorPosition,
+  const { messages, mode } = buildPrompt(projectFiles || {}, message, {
+    activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+    chatHistory,
   });
 
-  const parsed = parseAiResponse(response.content);
-
-  let updatedFiles = null;
-  let appliedEdits = [];
-  let failedEdits = [];
-  
-  if (parsed.edits && parsed.edits.length > 0) {
-    const result = applyEdits(projectFiles, parsed.edits, { activeFile });
-    updatedFiles = result.updatedFiles;
-    appliedEdits = result.applied;
-    failedEdits = result.failed;
-  }
+  const result = await callWithFallback(messages, provider || 'openrouter', preferredModel || null);
+  const parsed = parseAiResponse(result.content);
 
   return {
-    content: parsed.message,
-    provider: response.provider,
-    model: response.model,
-    mode: parsed.mode,
-    edits: { applied: appliedEdits, failed: failedEdits },
-    updatedFiles,
+    content: parsed.message || result.content,
+    provider: result.provider,
+    model: result.model,
+    mode: parsed.mode || mode,
+    edits: parsed.edits || [],
+    completedFile: parsed.completedFile || null,
   };
 }
 
-// ─── STREAM ─────────────────────────────────────────────────────────
-export async function handleStream(options) {
+// ─── HANDLE STREAM ────────────────────────────────────────────────
+export async function handleStream(params) {
   const {
-    message, projectFiles, chatHistory, provider, preferredModel,
-    activeFile, recentFiles, consoleErrors, buildErrors, selectedCode, cursorPosition,
-    onChunk, onComplete, onError,
-  } = options;
+    message,
+    projectFiles,
+    chatHistory,
+    provider,
+    preferredModel,
+    activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+    onChunk,
+    onComplete,
+  } = params;
+
+  const { messages, mode } = buildPrompt(projectFiles || {}, message, {
+    activeFile,
+    recentFiles,
+    consoleErrors,
+    buildErrors,
+    selectedCode,
+    cursorPosition,
+    chatHistory,
+  });
 
   let fullText = '';
-  let metadata = {};
+  const wrappedOnChunk = (chunk) => {
+    fullText += chunk;
+    if (onChunk) onChunk(chunk);
+  };
 
-  try {
-    const response = await streamCodeResponse(projectFiles, message, (chunk) => {
-      fullText += chunk;
-      if (onChunk) onChunk(chunk);
-    }, {
-      chatHistory, provider, preferredModel, activeFile, recentFiles,
-      consoleErrors, buildErrors, selectedCode, cursorPosition,
-    });
+  const result = await streamWithFallback(
+    messages,
+    wrappedOnChunk,
+    provider || 'openrouter',
+    preferredModel || null
+  );
 
-    const parsed = parseAiResponse(response);
-    
-    metadata = {
-      provider: response.provider,
-      model: response.model,
-      mode: parsed.mode,
-    };
+  const parsed = parseAiResponse(result.content || fullText);
 
-    if (parsed.edits && parsed.edits.length > 0) {
-      const result = applyEdits(projectFiles, parsed.edits, { activeFile });
-      metadata.edits = result;
-    }
+  const finalResult = {
+    content: parsed.message || result.content || fullText,
+    provider: result.provider,
+    model: result.model,
+    mode: parsed.mode || mode,
+    edits: parsed.edits || [],
+    completedFile: parsed.completedFile || null,
+  };
 
-    if (onComplete) onComplete(metadata);
-    return metadata;
-  } catch (error) {
-    if (onError) onError(error);
-    throw error;
-  }
+  if (onComplete) onComplete(finalResult);
+  return finalResult;
 }
 
-// ─── ANALYZE ────────────────────────────────────────────────────────
-export async function handleAnalyze(options) {
-  const { projectFiles, provider, preferredModel, activeFile } = options;
-  const reviewMessage = 'Please review this codebase for bugs, security issues, performance problems, and maintainability concerns. Be thorough and specific.';
+// ─── HANDLE ANALYZE ───────────────────────────────────────────────
+export async function handleAnalyze(params) {
+  const { projectFiles, provider, preferredModel, activeFile } = params;
 
-  const response = await generateCodeResponse(projectFiles, reviewMessage, {
-    provider, preferredModel, activeFile,
+  const reviewMessage = 'Please review this entire codebase for bugs, security vulnerabilities, performance issues, and TypeScript type safety problems. For each issue found, explain the problem and provide the corrected code using ```edit:path format only.';
+
+  const { messages, mode } = buildPrompt(projectFiles || {}, reviewMessage, {
+    activeFile,
+    chatHistory: [],
   });
 
-  const parsed = parseAiResponse(response);
+  const result = await callWithFallback(messages, provider || 'openrouter', preferredModel || null);
+  const parsed = parseAiResponse(result.content);
 
   return {
-    content: parsed.message,
-    provider: response.provider,
-    model: response.model,
+    content: parsed.message || result.content,
+    provider: result.provider,
+    model: result.model,
+    mode: 'review',
     edits: parsed.edits || [],
+    completedFile: parsed.completedFile || null,
   };
 }
 
-// ─── EXPLAIN ───────────────────────────────────────────────────────
-export async function handleExplain(options) {
-  const { projectFiles, filename, provider, preferredModel, activeFile } = options;
-  const explainMessage = `Please explain the code in file "${filename}". Break down what it does, key functions, and any important patterns or decisions.`;
+// ─── HANDLE EXPLAIN ───────────────────────────────────────────────
+export async function handleExplain(params) {
+  const { projectFiles, filename, provider, preferredModel, activeFile } = params;
 
-  const response = await generateCodeResponse(projectFiles, explainMessage, {
-    provider, preferredModel, activeFile,
+  const fileContent = projectFiles?.[filename] || '';
+  const explainMessage = `Please explain the following file in detail: ${filename}\n\nFile content:\n\`\`\`\n${fileContent}\n\`\`\`\n\nBreak down: what it does, how it works, key patterns used, and any potential improvements.`;
+
+  const { messages, mode } = buildPrompt(projectFiles || {}, explainMessage, {
+    activeFile: activeFile || filename,
+    chatHistory: [],
   });
 
-  const parsed = parseAiResponse(response);
+  const result = await callWithFallback(messages, provider || 'openrouter', preferredModel || null);
+  const parsed = parseAiResponse(result.content);
 
   return {
-    content: parsed.message,
-    provider: response.provider,
-    model: response.model,
+    content: parsed.message || result.content,
+    provider: result.provider,
+    model: result.model,
+    mode: 'explain',
+    edits: parsed.edits || [],
+    completedFile: parsed.completedFile || null,
   };
 }

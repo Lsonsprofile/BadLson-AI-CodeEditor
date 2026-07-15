@@ -22,14 +22,16 @@ const TOKEN_BUDGET = {
   TREE_MAX_FILES: 150,
 };
 
+// UPDATED July 2026 — verified free models on OpenRouter
 const DEFAULT_FREE_MODELS = [
-  'google/gemma-4-26b-it:free',
-  'google/gemma-4-31b-it:free',
-  'nvidia/llama-3.1-nemotron-70b-instruct:free',
   'meta-llama/llama-3.3-70b-instruct:free',
-  'deepseek/deepseek-chat:free',
-  'mistralai/mistral-small-3.1-24b-instruct:free',
-  'qwen/qwen-2.5-72b-instruct:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'poolside/laguna-m.1:free',
+  'cohere/north-mini-code:free',
+  'openai/gpt-oss-120b:free',
+  'qwen/qwen3-next-80b-a3b-instruct:free',
+  'google/gemma-4-31b-it:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
 ];
 
 let cachedFreeModels = null;
@@ -37,7 +39,6 @@ let lastModelFetch = 0;
 const MODEL_CACHE_TTL_MS = 1000 * 60 * 30;
 
 // ─── SYSTEM PROMPTS BY MODE ────────────────────────────────────────
-
 const BASE_SYSTEM = `You are a Senior Full-Stack Developer working inside BadLson AI Code Editor.
 
 TECH STACK: JavaScript ES6+, TypeScript, React, HTML5, CSS/Tailwind, Node.js, Express.
@@ -54,100 +55,30 @@ ABSOLUTE RULES — VIOLATING THESE CORRUPTS USER FILES:
 9. Explain your reasoning BEFORE showing code changes`;
 
 const MODE_PROMPTS = {
-  code: `${BASE_SYSTEM}
-
-MODE: CODE GENERATION
-You are writing new code or modifying existing code.
-- Provide complete, working, production-ready code inside edit blocks ONLY
-- Follow best practices: error handling, type safety, performance
-- If the request is vague, ask clarifying questions first`,
-
-  debug: `${BASE_SYSTEM}
-
-MODE: DEBUGGING
-You are helping fix a bug or error.
-1. First, explain what you think is causing the issue
-2. Then provide the fix using \`\`\`edit:path format ONLY
-3. Explain why the fix works
-4. Suggest how to prevent similar issues
-
-If you need:
-- Error messages → ask for them
-- Console logs → ask for them
-- Specific file content → ask for it`,
-
-  review: `${BASE_SYSTEM}
-
-MODE: CODE REVIEW
-You are reviewing code for quality.
-Analyze and report on:
-1. Bugs and logic errors
-2. Security vulnerabilities (XSS, injection, auth issues)
-3. Performance problems (unnecessary re-renders, O(n²) loops)
-4. Maintainability (naming, structure, comments)
-5. TypeScript type safety issues
-
-For each issue:
-- Explain the problem
-- Show the corrected code with \`\`\`edit:path ONLY
-- Explain why it's better`,
-
-  explain: `${BASE_SYSTEM}
-
-MODE: EXPLANATION
-You are explaining code or concepts.
-- Break complex topics into simple steps
-- Use the actual code from the project as examples
-- Explain common mistakes related to this topic
-- Suggest best practices
-- NO edit blocks needed unless the user asks for code changes`,
-
-  design: `${BASE_SYSTEM}
-
-MODE: ARCHITECTURE/DESIGN
-You are helping design software structure.
-- Consider scalability, maintainability, security
-- Explain tradeoffs between approaches
-- Suggest folder structure and file organization
-- Do NOT write full implementation unless asked`,
-
-  error: `${BASE_SYSTEM}
-
-MODE: ERROR RESPONSE
-The user's code has errors. Help them fix it.
-
-ERROR INFORMATION is provided below. Use it to diagnose.
-
-Steps:
-1. Identify the root cause from the error
-2. Explain what's wrong
-3. Provide the fix with \`\`\`edit:path ONLY
-4. Verify the fix handles edge cases`,
-
+  code: `${BASE_SYSTEM}\n\nMODE: CODE GENERATION\nYou are writing new code or modifying existing code.\n- Provide complete, working, production-ready code inside edit blocks ONLY\n- Follow best practices: error handling, type safety, performance\n- If the request is vague, ask clarifying questions first`,
+  debug: `${BASE_SYSTEM}\n\nMODE: DEBUGGING\nYou are helping fix a bug or error.\n1. First, explain what you think is causing the issue\n2. Then provide the fix using \`\`\`edit:path format ONLY\n3. Explain why the fix works\n4. Suggest how to prevent similar issues\n\nIf you need error messages, console logs, or specific file content → ask for them.`,
+  review: `${BASE_SYSTEM}\n\nMODE: CODE REVIEW\nAnalyze and report on: bugs, security vulnerabilities, performance problems, maintainability, TypeScript type safety.\nFor each issue: explain the problem, show corrected code with \`\`\`edit:path ONLY, explain why it's better.`,
+  explain: `${BASE_SYSTEM}\n\nMODE: EXPLANATION\nBreak complex topics into simple steps. Use actual project code as examples. NO edit blocks needed unless user asks for code changes.`,
+  design: `${BASE_SYSTEM}\n\nMODE: ARCHITECTURE/DESIGN\nConsider scalability, maintainability, security. Explain tradeoffs. Do NOT write full implementation unless asked.`,
+  error: `${BASE_SYSTEM}\n\nMODE: ERROR RESPONSE\nThe user's code has errors. Use provided error info to diagnose, identify root cause, explain what's wrong, provide fix with \`\`\`edit:path ONLY.`,
   generic: BASE_SYSTEM,
 };
 
-// ─── MODE DETECTION ────────────────────────────────────────────────
-
 function detectMode(userMessage, context = {}) {
   const msg = userMessage.toLowerCase();
-  
   if (context.consoleErrors?.length || context.buildErrors?.length) return 'error';
-  if (msg.includes('review') || msg.includes('check this code') || msg.includes('what do you think')) return 'review';
-  if (msg.includes('explain') || msg.includes('how does') || msg.includes('what is') || msg.includes('why does')) return 'explain';
-  if (msg.includes('design') || msg.includes('architecture') || msg.includes('structure') || msg.includes('folder')) return 'design';
-  if (msg.includes('fix') || msg.includes('bug') || msg.includes('error') || msg.includes('broken') || msg.includes('not working')) return 'debug';
+  if (msg.includes('review') || msg.includes('check this code')) return 'review';
+  if (msg.includes('explain') || msg.includes('how does') || msg.includes('what is')) return 'explain';
+  if (msg.includes('design') || msg.includes('architecture') || msg.includes('structure')) return 'design';
+  if (msg.includes('fix') || msg.includes('bug') || msg.includes('error') || msg.includes('broken')) return 'debug';
   if (msg.includes('add') || msg.includes('create') || msg.includes('write') || msg.includes('implement') || msg.includes('change') || msg.includes('update') || msg.includes('refactor')) return 'code';
-  
   return 'generic';
 }
 
 // ─── SMART FILE SELECTION ─────────────────────────────────────────
-
 export function selectRelevantFiles(projectFiles, userMessage, activeFile = null, recentFiles = []) {
   const entries = Object.entries(projectFiles);
   const totalFiles = entries.length;
-  
   if (totalFiles === 0) return {};
   if (totalFiles <= TOKEN_BUDGET.MAX_FILES) {
     return Object.fromEntries(entries.map(([name, content]) => [name, truncateContent(content)]));
@@ -155,22 +86,16 @@ export function selectRelevantFiles(projectFiles, userMessage, activeFile = null
 
   const msgLower = userMessage.toLowerCase();
   const msgWords = new Set(msgLower.split(/\W+/).filter(w => w.length > 2));
-  
   const importMap = buildImportMap(entries);
   
   const scoredFiles = entries.map(([filename, content]) => {
     let score = 0;
     const fileLower = filename.toLowerCase();
     const contentLower = content.toLowerCase();
-    const contentWords = contentLower.split(/\W+/).filter(w => w.length > 2);
-    const contentWordSet = new Set(contentWords);
+    const contentWordSet = new Set(contentLower.split(/\W+/).filter(w => w.length > 2));
     
-    if (activeFile && (filename === activeFile || fileLower.includes(activeFile.toLowerCase()))) {
-      score += 2000;
-    }
-    
+    if (activeFile && (filename === activeFile || fileLower.includes(activeFile.toLowerCase()))) score += 2000;
     if (recentFiles.includes(filename)) score += 500;
-    
     if (activeFile && importMap[activeFile]?.includes(filename)) score += 400;
     if (activeFile && importMap[filename]?.includes(activeFile)) score += 300;
     
@@ -218,7 +143,6 @@ export function selectRelevantFiles(projectFiles, userMessage, activeFile = null
 function buildImportMap(entries) {
   const map = {};
   const importRegex = /(?:import|require)\s*\(?['"]([^'"]+)['"]\)?/g;
-  
   for (const [filename, content] of entries) {
     map[filename] = [];
     let match;
@@ -310,16 +234,10 @@ function buildCompactTree(filenames, selectedFiles) {
 }
 
 // ─── PROMPT BUILDING ────────────────────────────────────────────────
-
-function buildPrompt(projectFiles, userMessage, options = {}) {
+export function buildPrompt(projectFiles, userMessage, options = {}) {
   const {
-    activeFile = null,
-    recentFiles = [],
-    consoleErrors = [],
-    buildErrors = [],
-    cursorPosition = null,
-    selectedCode = null,
-    chatHistory = [],
+    activeFile = null, recentFiles = [], consoleErrors = [], buildErrors = [],
+    cursorPosition = null, selectedCode = null, chatHistory = [],
   } = options;
 
   const fileEntries = Object.entries(projectFiles);
@@ -335,7 +253,6 @@ function buildPrompt(projectFiles, userMessage, options = {}) {
   const tree = buildCompactTree(allFilenames, selectedFiles);
 
   let contextParts = [];
-
   contextParts.push(`PROJECT STRUCTURE:\n${tree}`);
 
   const filesContext = Object.entries(selectedFiles).map(([filename, content]) => {
@@ -346,12 +263,8 @@ function buildPrompt(projectFiles, userMessage, options = {}) {
 
   if (activeFile) {
     contextParts.push(`\nCURRENTLY EDITING: ${activeFile}`);
-    if (cursorPosition) {
-      contextParts.push(`Cursor at line ${cursorPosition.line}, column ${cursorPosition.column}`);
-    }
-    if (selectedCode) {
-      contextParts.push(`SELECTED CODE:\n\`\`\`\n${selectedCode}\n\`\`\``);
-    }
+    if (cursorPosition) contextParts.push(`Cursor at line ${cursorPosition.line}, column ${cursorPosition.column}`);
+    if (selectedCode) contextParts.push(`SELECTED CODE:\n\`\`\`\n${selectedCode}\n\`\`\``);
   }
 
   if (consoleErrors.length > 0) {
@@ -366,26 +279,19 @@ function buildPrompt(projectFiles, userMessage, options = {}) {
   }
 
   contextParts.push(`\nUSER REQUEST: ${userMessage}`);
-
   const fullPrompt = contextParts.join('\n\n');
 
   const messages = [{ role: 'system', content: systemPrompt }];
-  
   const trimmedHistory = chatHistory.slice(-6);
   for (const msg of trimmedHistory) {
-    messages.push({
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: msg.content,
-    });
+    messages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
   }
-
   messages.push({ role: 'user', content: fullPrompt });
 
   return { messages, mode };
 }
 
 // ─── OPENROUTER ─────────────────────────────────────────────────────
-
 export async function fetchOpenRouterFreeModels() {
   try {
     const now = Date.now();
@@ -425,6 +331,24 @@ export async function fetchOpenRouterFreeModels() {
     console.warn('Error fetching OpenRouter models:', error.message);
     return DEFAULT_FREE_MODELS;
   }
+}
+
+export async function getAvailableModels() {
+  const freeModels = await fetchOpenRouterFreeModels();
+  return {
+    openrouter: {
+      status: !!OPENROUTER_API_KEY ? 'ok' : 'not_configured',
+      models: freeModels,
+    },
+    groq: {
+      status: !!GROQ_API_KEY ? 'ok' : 'not_configured',
+      models: ['meta-llama/llama-4-scout-17b-16e-instruct'],
+    },
+    gemini: {
+      status: !!GEMINI_API_KEY ? 'ok' : 'not_configured',
+      models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+    },
+  };
 }
 
 async function callOpenRouter(messages, preferredModel = null) {
@@ -495,8 +419,12 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
   let lastError;
   for (const model of modelsToTry) {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
+
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
           'Content-Type': 'application/json',
@@ -513,6 +441,8 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
         }),
       });
 
+      clearTimeout(timeoutId);
+
       if (!response.ok) {
         const errorText = await response.text();
         if ([429, 503, 404].includes(response.status)) {
@@ -526,6 +456,7 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
       const decoder = new TextDecoder();
       let fullText = '';
       let actualModel = model;
+      let chunkReceived = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -544,10 +475,15 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               fullText += content;
+              chunkReceived = true;
               if (onChunk) onChunk(content);
             }
           } catch { /* skip invalid JSON */ }
         }
+      }
+
+      if (!chunkReceived) {
+        throw new Error(`OpenRouter stream completed but no content chunks received for model ${model}`);
       }
 
       return {
@@ -556,8 +492,13 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
         provider: 'openrouter',
       };
     } catch (error) {
-      console.warn(`OpenRouter stream model ${model} failed:`, error.message);
-      lastError = error;
+      if (error.name === 'AbortError') {
+        console.warn(`OpenRouter stream timed out for model ${model}`);
+        lastError = new Error(`Timeout waiting for OpenRouter model ${model}`);
+      } else {
+        console.warn(`OpenRouter stream model ${model} failed:`, error.message);
+        lastError = error;
+      }
     }
   }
 
@@ -565,7 +506,6 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
 }
 
 // ─── GROQ ─────────────────────────────────────────────────────────
-
 async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-instruct') {
   if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not set');
 
@@ -575,12 +515,7 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
       'Authorization': `Bearer ${GROQ_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.3,
-      max_tokens: 8192,
-    }),
+    body: JSON.stringify({ model, messages, temperature: 0.3, max_tokens: 8192 }),
   });
 
   if (!response.ok) {
@@ -589,15 +524,9 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
   }
 
   const data = await response.json();
-  if (!data.choices?.[0]?.message?.content) {
-    throw new Error('Invalid response from Groq');
-  }
+  if (!data.choices?.[0]?.message?.content) throw new Error('Invalid response from Groq');
 
-  return {
-    content: data.choices[0].message.content,
-    model: data.model || model,
-    provider: 'groq',
-  };
+  return { content: data.choices[0].message.content, model: data.model || model, provider: 'groq' };
 }
 
 async function streamGroq(messages, onChunk) {
@@ -618,9 +547,7 @@ async function streamGroq(messages, onChunk) {
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(`Groq streaming error: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`Groq streaming error: ${response.status}`);
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -636,7 +563,6 @@ async function streamGroq(messages, onChunk) {
     for (const line of lines) {
       const data = line.replace('data:', '').trim();
       if (data === '[DONE]') continue;
-
       try {
         const parsed = JSON.parse(data);
         const content = parsed.choices?.[0]?.delta?.content;
@@ -648,15 +574,10 @@ async function streamGroq(messages, onChunk) {
     }
   }
 
-  return {
-    content: cleanResponse(fullText),
-    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-    provider: 'groq',
-  };
+  return { content: cleanResponse(fullText), model: 'meta-llama/llama-4-scout-17b-16e-instruct', provider: 'groq' };
 }
 
-// ─── GEMINI-SPECIFIC SYSTEM PROMPT ─────────────────────────────────
-
+// ─── GEMINI ─────────────────────────────────────────────────────────
 const GEMINI_SYSTEM = `You are a code editor AI. You MUST follow these rules EXACTLY:
 
 RULE 1: When changing code, use ONLY this format:
@@ -684,107 +605,57 @@ RULE 6: The edit block must contain the COMPLETE file content, not just changes.
 
 RULE 7: After giving code, say: **File Completed:** filename`;
 
-// ─── GEMINI ─────────────────────────────────────────────────────────
-
 async function callGemini(messages, model = 'gemini-2.5-flash') {
   if (!geminiClient) throw new Error('GEMINI_API_KEY not set');
 
-  const systemMsg = messages.find(m => m.role === 'system')?.content || '';
   const userMessages = messages.filter(m => m.role !== 'system');
-  
   const fullPrompt = GEMINI_SYSTEM + '\n\n=== PROJECT CONTEXT ===\n' + 
     userMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
 
-  try {
-    const result = await geminiClient.models.generateContent({
-      model,
-      contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-      config: {
-        maxOutputTokens: 8192,
-        temperature: 0.1,
-        topP: 0.1,
-      },
-    });
+  const result = await geminiClient.models.generateContent({
+    model,
+    contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+    config: { maxOutputTokens: 8192, temperature: 0.1, topP: 0.1 },
+  });
 
-    let text = '';
-    if (result.text) {
-      text = result.text;
-    } else if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
-      text = result.candidates[0].content.parts[0].text;
-    }
-
-    console.log(`[Gemini] Raw response length: ${text?.length || 0}`);
-    console.log(`[Gemini] First 200 chars: ${text?.slice(0, 200)}`);
-
-    if (!text || text.trim().length === 0) {
-      const finishReason = result.candidates?.[0]?.finishReason;
-      throw new Error(`Gemini empty response. Finish reason: ${finishReason || 'unknown'}`);
-    }
-
-    return {
-      content: text,
-      model,
-      provider: 'gemini',
-    };
-  } catch (error) {
-    console.error('[Gemini] Error:', error.message);
-    throw error;
+  let text = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  if (!text || text.trim().length === 0) {
+    throw new Error(`Gemini empty response. Finish reason: ${result.candidates?.[0]?.finishReason || 'unknown'}`);
   }
+
+  return { content: text, model, provider: 'gemini' };
 }
 
 async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
   if (!geminiClient) throw new Error('GEMINI_API_KEY not set');
 
-  const systemMsg = messages.find(m => m.role === 'system')?.content || '';
   const userMessages = messages.filter(m => m.role !== 'system');
-  
   const fullPrompt = GEMINI_SYSTEM + '\n\n=== PROJECT CONTEXT ===\n' + 
     userMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
 
-  try {
-    const result = await geminiClient.models.generateContentStream({
-      model,
-      contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-      config: {
-        maxOutputTokens: 8192,
-        temperature: 0.1,
-        topP: 0.1,
-      },
-    });
+  const result = await geminiClient.models.generateContentStream({
+    model,
+    contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+    config: { maxOutputTokens: 8192, temperature: 0.1, topP: 0.1 },
+  });
 
-    let fullText = '';
-    
-    for await (const chunk of result) {
-      let text = '';
-      if (chunk.text) {
-        text = chunk.text;
-      } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
-        text = chunk.candidates[0].content.parts[0].text;
-      }
-
-      if (text) {
-        fullText += text;
-        if (onChunk) onChunk(text);
-      }
+  let fullText = '';
+  for await (const chunk of result) {
+    let text = chunk.text || chunk.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    if (text) {
+      fullText += text;
+      if (onChunk) onChunk(text);
     }
-
-    if (!fullText || fullText.trim().length === 0) {
-      throw new Error('Gemini streaming returned no content.');
-    }
-
-    return {
-      content: cleanResponse(fullText),
-      model,
-      provider: 'gemini',
-    };
-  } catch (error) {
-    console.error('[Gemini] Stream error:', error.message);
-    throw error;
   }
+
+  if (!fullText || fullText.trim().length === 0) {
+    throw new Error('Gemini streaming returned no content.');
+  }
+
+  return { content: cleanResponse(fullText), model, provider: 'gemini' };
 }
 
 // ─── RESPONSE CLEANING & PARSING ────────────────────────────────────
-
 function cleanResponse(text) {
   if (!text) return '';
   return text
@@ -815,9 +686,7 @@ export function parseAiResponse(response) {
     let match;
     while ((match = pattern.exec(cleaned)) !== null) {
       const existing = edits.find(e => e.filename === match[1].trim() && e.code === match[2].trim());
-      if (!existing) {
-        edits.push({ filename: match[1].trim(), code: match[2].trim() });
-      }
+      if (!existing) edits.push({ filename: match[1].trim(), code: match[2].trim() });
     }
   }
 
@@ -826,9 +695,7 @@ export function parseAiResponse(response) {
     let match;
     while ((match = codeBlockRegex.exec(cleaned)) !== null) {
       const filename = guessFilenameFromContext(cleaned, match[1]);
-      if (filename) {
-        edits.push({ filename, code: match[1].trim() });
-      }
+      if (filename) edits.push({ filename, code: match[1].trim() });
     }
   }
 
@@ -836,14 +703,8 @@ export function parseAiResponse(response) {
   const completedMatch = cleaned.match(fileCompletedRegex);
 
   let message = cleaned;
-  for (const pattern of editPatterns) {
-    message = message.replace(pattern, '');
-  }
-  
-  message = message
-    .replace(/\*\*File Completed:[^\n]*\*\*/gi, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  for (const pattern of editPatterns) message = message.replace(pattern, '');
+  message = message.replace(/\*\*File Completed:[^\n]*\*\*/gi, '').replace(/\n{3,}/g, '\n\n').trim();
 
   let detectedMode = 'generic';
   if (message.includes('BUG:') || message.includes('FIX:')) detectedMode = 'debug';
@@ -857,17 +718,14 @@ export function parseAiResponse(response) {
 function guessFilenameFromContext(text, code) {
   const fileMatch = text.match(/(?:update|change|edit|modify|fix)\s+['"]?([^'"\s]+\.(?:html|css|js|ts|tsx|jsx))['"]?/i);
   if (fileMatch) return fileMatch[1];
-  
   if (code.includes('<!DOCTYPE') || code.includes('<html')) return 'index.html';
   if (code.includes('@tailwind') || code.includes(':root {') || code.includes('@import')) return 'styles.css';
   if (code.includes('import React') || code.includes('export default')) return 'App.tsx';
   if (code.includes('import {') && code.includes('from')) return 'App.tsx';
-  
   return null;
 }
 
 // ─── SMART EDIT APPLICATION ────────────────────────────────────────
-
 export function applyEdits(projectFiles, edits, options = {}) {
   const { activeFile = null, strategy = 'smart' } = options;
   const updatedFiles = { ...projectFiles };
@@ -876,7 +734,6 @@ export function applyEdits(projectFiles, edits, options = {}) {
 
   for (const edit of edits) {
     const { filename, code } = edit;
-    
     if (!code || code.length < 5) {
       failed.push({ filename, reason: 'Empty or too short edit block' });
       continue;
@@ -889,7 +746,6 @@ export function applyEdits(projectFiles, edits, options = {}) {
     }
 
     const original = updatedFiles[filename];
-    
     if (strategy === 'replace') {
       updatedFiles[filename] = code;
       applied.push({ filename, type: 'replaced' });
@@ -897,7 +753,6 @@ export function applyEdits(projectFiles, edits, options = {}) {
     }
 
     const result = smartApplyEdit(original, code, filename === activeFile);
-    
     if (result.success) {
       updatedFiles[filename] = result.content;
       applied.push({ filename, type: result.type });
@@ -911,213 +766,160 @@ export function applyEdits(projectFiles, edits, options = {}) {
 }
 
 function smartApplyEdit(original, newCode, isActiveFile) {
-  if (newCode.includes('<!DOCTYPE') || newCode.includes('<html') || 
-      (newCode.includes('export default') && original.includes('export default')) ||
-      newCode.length > original.length * 0.85) {
-    return { success: true, content: newCode, type: 'replaced' };
+  if (newCode.includes('<!DOCTYPE') || newCode.includes('<html')) {
+    return { success: true, type: 'replaced', content: newCode };
   }
 
-  const funcRegex = /(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+(\w+)|class\s+(\w+)|const\s+(\w+)\s*=\s*(?:async\s*)?\(/g;
-  const newFuncs = [];
-  let m;
-  while ((m = funcRegex.exec(newCode)) !== null) {
-    newFuncs.push(m[1] || m[2] || m[3]);
+  const originalLines = original.split('\n');
+  const newLines = newCode.split('\n');
+
+  if (newLines.length < 3) {
+    return { success: true, type: 'replaced', content: newCode };
   }
 
-  if (newFuncs.length === 1) {
-    const funcName = newFuncs[0];
-    const funcPattern = new RegExp(
-      `((?:export\\s+(?:default\\s+)?)?(?:async\\s+)?(?:function\\s+|class\\s+|const\\s+)${funcName}\\s*[=(])` +
-      `[\\s\\S]*?(?=(?:\\n(?:export\\s|class\\s|function\\s|const\\s|let\\s|var\\s)|$))`,
-      'm'
-    );
-    
-    if (funcPattern.test(original)) {
-      const replaced = original.replace(funcPattern, newCode.trim());
-      if (replaced !== original) {
-        return { success: true, content: replaced, type: 'patched' };
-      }
+  const commonStart = findCommonStart(originalLines, newLines);
+  const commonEnd = findCommonEnd(originalLines, newLines, commonStart);
+
+  if (commonStart >= 3 || (commonStart >= 2 && commonEnd >= 2)) {
+    const merged = [
+      ...originalLines.slice(0, originalLines.length - commonEnd),
+      ...newLines.slice(commonStart, newLines.length - commonEnd),
+      ...originalLines.slice(originalLines.length - commonEnd),
+    ];
+    return { success: true, type: 'patched', content: merged.join('\n') };
+  }
+
+  if (isActiveFile) {
+    return { success: true, type: 'replaced', content: newCode };
+  }
+
+  return { success: false, reason: 'Could not safely merge changes', content: original };
+}
+
+function findCommonStart(a, b) {
+  let i = 0;
+  while (i < Math.min(a.length, b.length) && a[i].trim() === b[i].trim()) i++;
+  return i;
+}
+
+function findCommonEnd(a, b, startOffset) {
+  let i = 0;
+  while (
+    i < Math.min(a.length - startOffset, b.length - startOffset) &&
+    a[a.length - 1 - i].trim() === b[b.length - 1 - i].trim()
+  ) i++;
+  return i;
+}
+
+// ─── PROVIDER SELECTION & FALLBACK ─────────────────────────────────
+export async function callWithFallback(messages, preferredProvider = 'openrouter', preferredModel = null) {
+  const providers = [];
+  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
+  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
+  if (preferredProvider === 'gemini' && GEMINI_API_KEY) providers.push('gemini');
+
+  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
+  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
+  if (GEMINI_API_KEY && !providers.includes('gemini')) providers.push('gemini');
+
+  if (providers.length === 0) {
+    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.');
+  }
+
+  let lastError;
+  for (const provider of providers) {
+    try {
+      if (provider === 'openrouter') return await callOpenRouter(messages, preferredModel);
+      if (provider === 'groq') return await callGroq(messages, preferredModel);
+      if (provider === 'gemini') return await callGemini(messages, preferredModel);
+    } catch (error) {
+      console.warn(`Provider ${provider} failed:`, error.message);
+      lastError = error;
     }
   }
 
-  if (isActiveFile && newCode.length < original.length * 0.3) {
-    return { 
-      success: true, 
-      content: original + '\n\n' + newCode,
-      type: 'appended' 
-    };
+  throw lastError || new Error('All AI providers failed');
+}
+
+export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null) {
+  const providers = [];
+  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
+  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
+  if (preferredProvider === 'gemini' && GEMINI_API_KEY) providers.push('gemini');
+
+  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
+  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
+  if (GEMINI_API_KEY && !providers.includes('gemini')) providers.push('gemini');
+
+  if (providers.length === 0) {
+    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.');
   }
 
-  return { 
-    success: false, 
-    reason: 'Could not determine insertion point. Code does not match any existing function/class. Ask the user to clarify.' 
-  };
-}
-
-// ─── PROVIDER CHAIN ─────────────────────────────────────────────────
-
-function getProviderChain(preferredProvider = 'openrouter') {
-  const allProviders = ['openrouter', 'groq', 'gemini'];
-  const ordered = [preferredProvider, ...allProviders.filter(p => p !== preferredProvider)];
-  
-  return ordered.map(p => {
-    switch (p) {
-      case 'openrouter': return { name: 'openrouter', call: (msgs) => callOpenRouter(msgs) };
-      case 'groq': return { name: 'groq', call: (msgs) => callGroq(msgs) };
-      case 'gemini': return { name: 'gemini', call: (msgs) => callGemini(msgs, 'gemini-2.5-flash') };
-      default: return { name: 'openrouter', call: (msgs) => callOpenRouter(msgs) };
+  let lastError;
+  for (const provider of providers) {
+    try {
+      if (provider === 'openrouter') return await streamOpenRouter(messages, onChunk, preferredModel);
+      if (provider === 'groq') return await streamGroq(messages, onChunk);
+      if (provider === 'gemini') return await streamGemini(messages, onChunk, preferredModel);
+    } catch (error) {
+      console.warn(`Provider ${provider} stream failed:`, error.message);
+      lastError = error;
     }
-  });
-}
-
-function getStreamProviderChain(preferredProvider = 'openrouter') {
-  const allProviders = ['openrouter', 'groq', 'gemini'];
-  const ordered = [preferredProvider, ...allProviders.filter(p => p !== preferredProvider)];
-  
-  return ordered.map(p => {
-    switch (p) {
-      case 'openrouter': return { name: 'openrouter', call: (msgs, onChunk) => streamOpenRouter(msgs, onChunk) };
-      case 'groq': return { name: 'groq', call: (msgs, onChunk) => streamGroq(msgs, onChunk) };
-      case 'gemini': return { name: 'gemini', call: (msgs, onChunk) => streamGemini(msgs, onChunk, 'gemini-2.5-flash') };
-      default: return { name: 'openrouter', call: (msgs, onChunk) => streamOpenRouter(msgs, onChunk) };
-    }
-  });
-}
-
-// ─── MAIN GENERATION ────────────────────────────────────────────────
-
-export async function generateCodeResponse(projectFiles, userMessage, options = {}) {
-  const { provider = 'openrouter' } = options;
-  
-  try {
-    const { messages, mode } = buildPrompt(projectFiles, userMessage, options);
-    console.log(`[AI] Mode detected: ${mode}, Provider: ${provider}`);
-
-    const chain = getProviderChain(provider);
-    let lastError;
-
-    for (const { name, call } of chain) {
-      try {
-        const result = await call(messages);
-        if (!result?.content) continue;
-        
-        const cleaned = cleanResponse(result.content);
-        console.log(`[AI] Success: ${name}/${result.model}, length: ${cleaned.length}, mode: ${mode}`);
-        
-        return {
-          content: cleaned,
-          provider: result.provider,
-          model: result.model,
-          mode,
-      };
-      } catch (error) {
-        console.warn(`[AI] Provider ${name} failed:`, error.message);
-        lastError = error;
-      }
-    }
-
-    console.error('[AI] All providers failed:', lastError);
-    return getFallbackResponse();
-  } catch (error) {
-    console.error('[AI] generateCodeResponse error:', error);
-    return getFallbackResponse();
   }
+
+  throw lastError || new Error('All AI provider streams failed');
 }
 
-export async function streamCodeResponse(projectFiles, userMessage, onChunk, options = {}) {
-  const { provider = 'openrouter' } = options;
-  
-  try {
-    const { messages, mode } = buildPrompt(projectFiles, userMessage, options);
-    console.log(`[AI] Stream mode: ${mode}, Provider: ${provider}`);
-
-    const chain = getStreamProviderChain(provider);
-    let lastError;
-
-    for (const { name, call } of chain) {
-      try {
-        const result = await call(messages, onChunk);
-        console.log(`[AI] Stream success: ${name}/${result.model}`);
-        return {
-          content: result.content,
-          provider: result.provider,
-          model: result.model,
-          mode,
-      };
-      } catch (error) {
-        console.warn(`[AI] Stream provider ${name} failed:`, error.message);
-        lastError = error;
-      }
-    }
-
-    throw lastError || new Error('All streaming providers failed');
-  } catch (error) {
-    console.error('[AI] streamCodeResponse error:', error);
-    const fallback = getFallbackResponse();
-    if (onChunk) onChunk(fallback);
-    return fallback;
-  }
-}
-
-function getFallbackResponse() {
-  return 'I apologize, but I encountered an error processing your request. Please check your API configuration and try again.';
-}
-
-// ─── HEALTH CHECKS ──────────────────────────────────────────────────
-
+// ─── TEST CONNECTION ────────────────────────────────────────────────
 export async function testConnection() {
-  const results = {};
+  const results = {
+    openrouter: { status: 'not_configured' },
+    groq: { status: 'not_configured' },
+    gemini: { status: 'not_configured' },
+  };
 
   if (OPENROUTER_API_KEY) {
     try {
-      const messages = [
-        { role: 'system', content: 'You are a helpful assistant.' },
-        { role: 'user', content: 'Say "OK" in one word.' },
-      ];
-      const response = await callOpenRouter(messages);
-      results.openrouter = { status: 'ok', response: response.content.trim(), model: response.model };
-    } catch (error) {
-      results.openrouter = { status: 'error', error: error.message };
+      const response = await fetch('https://openrouter.ai/api/v1/auth/key', {
+        headers: { 'Authorization': `Bearer ${OPENROUTER_API_KEY}` },
+      });
+      results.openrouter = {
+        status: response.ok ? 'ok' : 'error',
+        statusCode: response.status,
+      };
+    } catch (err) {
+      results.openrouter = { status: 'error', message: err.message };
     }
-  } else {
-    results.openrouter = { status: 'not_configured' };
   }
 
   if (GROQ_API_KEY) {
     try {
-      const messages = [
-        { role: 'system', content: 'You are a helpful assistant.' },
-        { role: 'user', content: 'Say "OK" in one word.' },
-      ];
-      const response = await callGroq(messages);
-      results.groq = { status: 'ok', response: response.content.trim() };
-    } catch (error) {
-      results.groq = { status: 'error', error: error.message };
+      const response = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { 'Authorization': `Bearer ${GROQ_API_KEY}` },
+      });
+      results.groq = {
+        status: response.ok ? 'ok' : 'error',
+        statusCode: response.status,
+      };
+    } catch (err) {
+      results.groq = { status: 'error', message: err.message };
     }
-  } else {
-    results.groq = { status: 'not_configured' };
   }
 
-  if (geminiClient) {
+  if (GEMINI_API_KEY) {
     try {
-      const messages = [{ role: 'user', content: 'Say "OK" in one word.' }];
-      const response = await callGemini(messages);
-      results.gemini = { status: 'ok', response: response.content.trim() };
-    } catch (error) {
-      results.gemini = { status: 'error', error: error.message };
+      const result = await geminiClient.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
+        config: { maxOutputTokens: 10 },
+      });
+      results.gemini = {
+        status: result.text ? 'ok' : 'error',
+      };
+    } catch (err) {
+      results.gemini = { status: 'error', message: err.message };
     }
-  } else {
-    results.gemini = { status: 'not_configured' };
   }
 
   return results;
-}
-
-export async function getAvailableModels() {
-  const freeModels = await fetchOpenRouterFreeModels();
-  return {
-    openrouter: { configured: !!OPENROUTER_API_KEY, freeModels, defaultModels: DEFAULT_FREE_MODELS },
-    groq: { configured: !!GROQ_API_KEY, models: ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.3-70b-versatile'] },
-    gemini: { configured: !!GEMINI_API_KEY, models: ['gemini-2.5-flash', 'gemini-2.5-pro'] },
-  };
 }
