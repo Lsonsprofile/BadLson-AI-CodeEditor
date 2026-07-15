@@ -861,35 +861,12 @@ function findCommonEnd(a, b, startOffset) {
 }
 
 // ─── PROVIDER SELECTION & FALLBACK ─────────────────────────────────
+// ─── PROVIDER SELECTION & FALLBACK ─────────────────────────────────
 export async function callWithFallback(messages, preferredProvider = 'openrouter', preferredModel = null) {
-  const providers = [];
-  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
-  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
-  if (preferredProvider === 'gemini' && GEMINI_API_KEY) providers.push('gemini');
-
-  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
-  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
-  if (GEMINI_API_KEY && !providers.includes('gemini')) providers.push('gemini');
-
-  if (providers.length === 0) {
-    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.');
-  }
-
-  let lastError;
-  for (const provider of providers) {
-    try {
-      if (provider === 'openrouter') return await callOpenRouter(messages, preferredModel);
-      if (provider === 'groq') return await callGroq(messages, preferredModel);
-      if (provider === 'gemini') return await callGemini(messages, preferredModel);
-    } catch (error) {
-      console.warn(`Provider ${provider} failed:`, error.message);
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error('All AI providers failed');
+  // ... (implementation)
 }
 
+// ❌ DUPLICATE – DELETE THIS ENTIRE BLOCK
 export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null) {
   const providers = [];
   if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
@@ -918,7 +895,6 @@ export async function streamWithFallback(messages, onChunk, preferredProvider = 
 
   throw lastError || new Error('All AI provider streams failed');
 }
-
 // ─── TEST CONNECTION ────────────────────────────────────────────────
 export async function testConnection() {
   const results = {
