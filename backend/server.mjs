@@ -21,6 +21,10 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 const app = express();
+
+// ✅ TRUST RENDER'S PROXY (required for rate-limit + correct client IPs)
+app.set('trust proxy', 1);
+
 const PORT = process.env.PORT || 5002;
 
 // ─── ENV DEBUG ──────────────────────────────────────────────────────
@@ -58,6 +62,7 @@ const globalLimiter = rateLimit({
  legacyHeaders: false,
  message: { error: 'Too many requests, please try again later.' },
  skip: (req) => req.path === '/api/health', // Skip health check
+ validate: { xForwardedForHeader: false }, // ✅ Fix for Render proxy
 });
 
 const aiLimiter = rateLimit({
@@ -66,6 +71,7 @@ const aiLimiter = rateLimit({
  standardHeaders: true,
  legacyHeaders: false,
  message: { error: 'Too many AI requests, please try again later.' },
+ validate: { xForwardedForHeader: false }, // ✅ Fix for Render proxy
 });
 
 const uploadLimiter = rateLimit({
@@ -74,6 +80,7 @@ const uploadLimiter = rateLimit({
  standardHeaders: true,
  legacyHeaders: false,
  message: { error: 'Upload limit reached, please try again later.' },
+ validate: { xForwardedForHeader: false }, // ✅ Fix for Render proxy
 });
 
 app.use(globalLimiter);
