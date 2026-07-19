@@ -1,0 +1,38 @@
+services:
+  # Backend API Service
+  - type: web
+    name: badlson-backend
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start
+    rootDir: backend
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        value: https://badlson-frontend.onrender.com
+
+  # Frontend Static Site
+  - type: web
+    name: badlson-frontend
+    runtime: static
+    region: oregon
+    plan: free
+    buildCommand: npm run build
+    staticPublishPath: dist
+    rootDir: .
+    envVars:
+      - key: VITE_API_URL
+        value: https://badlson-backend.onrender.com/api

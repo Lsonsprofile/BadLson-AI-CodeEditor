@@ -16,6 +16,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:backend": "cd backend && npm install",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "cross-env NODE_ENV=production node backend/server.mjs",
@@ -26,7 +27,8 @@
     "validate:watch": "node --watch backend/scripts/validate-project.mjs",
     "clean": "rm -rf node_modules package-lock.json && npm install",
     "audit": "npm audit",
-    "security-check": "npm audit --production"
+    "security-check": "npm audit --production",
+    "postinstall": "cd backend && npm install"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",

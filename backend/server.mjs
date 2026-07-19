@@ -84,7 +84,7 @@ const uploadLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20, // Stricter limit for auth endpoints
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many authentication attempts, please try again later.' },
@@ -92,7 +92,7 @@ const authLimiter = rateLimit({
 });
 
 app.use(globalLimiter);
-app.use('/api/ai', aiLimiter); // AI rate limiter (no auth)
+app.use('/api/ai', aiLimiter);
 app.use('/api/upload', uploadLimiter);
 app.use('/api/auth', authLimiter);
 
@@ -121,7 +121,6 @@ app.use(cors({
 }));
 
 // ─── BODY PARSING ───────────────────────────────────────────────────
-// Reduced limits for security (was 250mb)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -174,7 +173,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 
 // ─── AI ROUTES (PUBLIC - NO AUTH REQUIRED) ─────────────────────────
-// AI should be accessible to everyone
+// ✅ FIXED: AI should be accessible to everyone
 app.use('/api/ai', aiRoutes);
 
 // ─── PROTECTED ROUTES (auth required) ──────────────────────────────
