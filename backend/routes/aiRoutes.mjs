@@ -91,7 +91,7 @@ router.post('/stream', asyncHandler(async (req, res) => {
   res.status(200);
 
   // Flush headers immediately so client knows connection is alive
-  res.flushHeaders?.();
+  if (res.flushHeaders) res.flushHeaders();
 
   if (!message || typeof message !== 'string') {
     sseWrite(res, { type: 'error', error: 'Message is required and must be a string' });
@@ -101,6 +101,7 @@ router.post('/stream', asyncHandler(async (req, res) => {
 
   // Send initial ping so frontend knows stream is alive
   sseComment(res, 'connected');
+  sseWrite(res, { type: 'info', message: 'Connecting to AI…' });
 
   let fullResponse = '';
   let metadata = {};
@@ -108,7 +109,7 @@ router.post('/stream', asyncHandler(async (req, res) => {
   let chunkCount = 0;
   let firstChunkReceived = false;
 
-  // Keep-alive every 10s (Render proxy timeout ~100s)
+  // Keep-alive every 10s
   const keepAliveInterval = setInterval(() => {
     if (isClosed) return;
     const ok = sseComment(res, `keepalive-${Date.now()}`);
@@ -119,6 +120,7 @@ router.post('/stream', asyncHandler(async (req, res) => {
     if (isClosed) return;
     isClosed = true;
     clearInterval(keepAliveInterval);
+    clearTimeout(safetyTimeout);
     req.off('close', onClientClose);
     req.off('abort', onClientClose);
   }
@@ -175,21 +177,20 @@ router.post('/stream', asyncHandler(async (req, res) => {
 
     if (!isClosed) {
       if (!firstChunkReceived) {
-        // Stream succeeded but returned zero content
         console.warn('[AI Stream] Stream completed but no chunks were received');
         sseWrite(res, { type: 'error', error: 'AI returned empty response. The model may be unavailable or the request was too large.' });
       } else {
         sseWrite(res, {
           type: 'done',
-          provider: metadata.provider,
-          model: metadata.model,
-          mode: metadata.mode,
+          provider: metadata.provider || 'unknown',
+          model: metadata.model || 'unknown',
+          mode: metadata.mode || 'generic',
         });
       }
     }
   } catch (error) {
     clearTimeout(safetyTimeout);
-    console.error('[AI Stream] Error:', error.message, error.stack);
+    console.error('[AI Stream] Error:', error.message);
     if (!isClosed) {
       sseWrite(res, {
         type: 'error',

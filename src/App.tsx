@@ -8,8 +8,7 @@ import ChatPanel from './components/AI/ChatPanel';
 import SettingsPanel from './components/Settings/SettingsPanel';
 import AccountModal from './components/Auth/AccountModal';
 import { useWorkspaceStore } from './store/workspaceStore';
-import { onAuthChange } from './firebase/auth';
-import { loadWorkspaceState, saveWorkspaceState } from './firebase/firestore';
+import { getCurrentUser, isAuthenticated, getToken } from './auth/authService';
 import { CheckCircle } from 'lucide-react';
 
 function Toast() {
@@ -63,6 +62,59 @@ function AppLayout() {
   const { aiPanelVisible, sidebarVisible } = useWorkspaceStore();
   const setAuthUser = useWorkspaceStore((state) => state.setAuthUser);
   const setWorkspaceState = useWorkspaceStore((state) => state.setWorkspaceState);
+  const authUser = useWorkspaceStore((state) => state.authUser);
+
+  // Check auth status on mount
+  useEffect(() => {
+    const user = getCurrentUser();
+    if (user) {
+      setAuthUser({
+        uid: user.id,
+        email: user.email,
+        displayName: user.name,
+      });
+      
+      // Load saved workspace state from localStorage
+      try {
+        const savedState = localStorage.getItem('workspace_state');
+        if (savedState) {
+          const parsed = JSON.parse(savedState);
+          setWorkspaceState(parsed);
+        }
+      } catch (error) {
+        console.error('Failed to load workspace state:', error);
+      }
+    } else {
+      setAuthUser(null);
+    }
+  }, [setAuthUser, setWorkspaceState]);
+
+  // Save workspace state when it changes
+  useEffect(() => {
+    if (authUser?.uid) {
+      const state = useWorkspaceStore.getState();
+      const { files, activeFile, openFiles, sidebarVisible, aiPanelVisible, previewDevice, isRunning, editorOptions, currentProject, projects, chatHistory, isAiTyping } = state;
+      
+      try {
+        localStorage.setItem('workspace_state', JSON.stringify({
+          files,
+          activeFile,
+          openFiles,
+          sidebarVisible,
+          aiPanelVisible,
+          previewDevice,
+          isRunning,
+          editorOptions,
+          currentProject,
+          projects,
+          chatHistory,
+          isAiTyping,
+        }));
+      } catch (error) {
+        console.error('Failed to save workspace state:', error);
+      }
+    }
+  }, [authUser]);
 
   useEffect(() => {
     const handleToggleSettings = () => setShowSettings((prev) => !prev);
@@ -75,28 +127,6 @@ function AppLayout() {
     window.addEventListener('toggle-account', handleToggleAccount);
     return () => window.removeEventListener('toggle-account', handleToggleAccount);
   }, []);
-
-  useEffect(() => {
-    const unsubscribe = onAuthChange(async (user) => {
-      if (user) {
-        const authUser = {
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName,
-        };
-        setAuthUser(authUser);
-
-        const loadedState = await loadWorkspaceState(user.uid);
-        if (loadedState) {
-          setWorkspaceState(loadedState);
-        }
-      } else {
-        setAuthUser(null);
-      }
-    });
-
-    return () => unsubscribe();
-  }, [setAuthUser, setWorkspaceState]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -129,44 +159,6 @@ function AppLayout() {
       document.body.style.userSelect = '';
     };
   }, [draggingSidebar, draggingAi]);
-
-  useEffect(() => {
-    const handleSave = async () => {
-      const toast = document.getElementById('toast');
-      const toastMsg = document.getElementById('toastMsg');
-      if (toast && toastMsg) {
-        toastMsg.textContent = 'All files saved';
-        toast.classList.remove('opacity-0', 'pointer-events-none');
-        toast.classList.add('opacity-100');
-        setTimeout(() => {
-          toast.classList.remove('opacity-100');
-          toast.classList.add('opacity-0', 'pointer-events-none');
-        }, 3000);
-      }
-
-      const state = useWorkspaceStore.getState();
-      if (state.authUser?.uid) {
-        await saveWorkspaceState(state.authUser.uid, {
-          files: state.files,
-          activeFile: state.activeFile,
-          openFiles: state.openFiles,
-          sidebarVisible: state.sidebarVisible,
-          aiPanelVisible: state.aiPanelVisible,
-          previewDevice: state.previewDevice,
-          isRunning: state.isRunning,
-          editorOptions: state.editorOptions,
-          currentProject: state.currentProject,
-          projects: state.projects,
-          chatHistory: state.chatHistory,
-          isAiTyping: state.isAiTyping,
-        });
-      }
-    };
-
-    window.addEventListener('save-files', handleSave);
-    return () => window.removeEventListener('save-files', handleSave);
-  }, []);
-
 
   return (
     <div className="min-h-screen h-screen flex flex-col bg-[#0b0f19] text-slate-300 overflow-hidden">

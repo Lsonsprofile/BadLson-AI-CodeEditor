@@ -74,7 +74,7 @@ interface AIStore extends ExtendedAIState {
 
 const DEFAULT_PROVIDER_CONFIG = Object.freeze({
   provider: 'openrouter',
-  model: 'deepseek/deepseek-chat-v3-0324:free',
+  model: 'tencent/hy3:free', // ✅ Changed from deepseek to working model
   temperature: 0.7,
   maxTokens: 4096,
   topP: 1,
@@ -422,7 +422,6 @@ export const useAIStore = create<AIStore>()(
         fallbackEnabled: state.fallbackEnabled,
         providerConfig: state.providerConfig,
         conversationId: state.conversationId,
-        // Limit persisted messages to last 20
         messages: state.messages.slice(-20),
         suggestions: state.suggestions.slice(-10),
         diagnostics: state.diagnostics.slice(-10),

@@ -12,7 +12,9 @@ import type {
 } from "./types";
 import type { AIMessage } from "@/store/ai/ai.types";
 
-// ✅ Standardized: VITE_API_URL is the origin only, we append /api/ai
+// ✅ Use environment variable with fallback for local development
+// On Render: VITE_API_URL=https://badlson-backend.onrender.com
+// Local dev: http://localhost:5002 (if not set)
 const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:5002'}/api/ai`;
 
 // ─── REQUEST ADAPTER ────────────────────────────────────────────────
@@ -141,12 +143,13 @@ function buildError(
 // Parses Server-Sent Events from /api/ai/stream
 
 interface SSEEvent {
-  type: "chunk" | "done" | "error";
+  type: "chunk" | "done" | "error" | "info";
   content?: string;
   provider?: string;
   model?: string;
   mode?: string;
   error?: string;
+  message?: string;
 }
 
 async function parseSSEStream(
@@ -163,71 +166,125 @@ async function parseSSEStream(
   let fullText = "";
   let metadata: { provider: string; model: string } = { provider: "unknown", model: "unknown" };
   let chunkId = 0;
+  let hasReceivedContent = false;
+
+  console.log('[AIClient] 🔄 Starting SSE stream parsing...');
 
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        console.log('[AIClient] 📭 Stream ended by server');
+        break;
+      }
 
-      buffer += decoder.decode(value, { stream: true });
+      const chunk = decoder.decode(value, { stream: true });
+      console.log('[AIClient] 📦 Raw chunk received, length:', chunk.length);
+      buffer += chunk;
 
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
+      // Process complete SSE events (separated by double newline)
+      let eventEndIndex;
+      while ((eventEndIndex = buffer.indexOf('\n\n')) !== -1) {
+        const eventData = buffer.substring(0, eventEndIndex);
+        buffer = buffer.substring(eventEndIndex + 2);
 
-      for (const event of events) {
-        const lines = event.split("\n").filter((line) => line.trim());
-        let dataLine = "";
+        // Parse the SSE event
+        const lines = eventData.split('\n');
+        let dataLine = null;
+        let isComment = false;
 
         for (const line of lines) {
-          if (line.startsWith("data:")) {
-            dataLine = line.replace(/^data:\s*/, "").trim();
+          if (line.startsWith(':')) {
+            isComment = true;
+            continue;
+          }
+          if (line.startsWith('data:')) {
+            dataLine = line.substring(5).trim();
+            break;
           }
         }
 
-        if (!dataLine) continue;
+        // Skip comments (like :connected)
+        if (isComment && !dataLine) {
+          console.log('[AIClient] 💬 SSE comment received');
+          continue;
+        }
+
+        if (!dataLine) {
+          console.log('[AIClient] ⚠️ Empty data line, skipping');
+          continue;
+        }
+
+        console.log('[AIClient] 📨 SSE data line:', dataLine.substring(0, 100));
 
         try {
           const parsed: SSEEvent = JSON.parse(dataLine);
+          console.log('[AIClient] ✅ Parsed SSE event type:', parsed.type);
 
-          if (parsed.type === "chunk" && parsed.content) {
-            fullText += parsed.content;
-            onChunk({
-              id: `chunk-${chunkId++}`,
-              content: parsed.content,
-              done: false,
-            });
-          } else if (parsed.type === "done") {
+          if (parsed.type === 'chunk' && parsed.content !== undefined) {
+            // Handle content chunk
+            if (parsed.content) {
+              fullText += parsed.content;
+              hasReceivedContent = true;
+              console.log('[AIClient] 📝 Content chunk received, length:', parsed.content.length, 'total:', fullText.length);
+              
+              onChunk({
+                id: `chunk-${chunkId++}`,
+                content: parsed.content,
+                done: false,
+              });
+            } else {
+              console.log('[AIClient] ⚠️ Empty content chunk received');
+            }
+          } else if (parsed.type === 'done') {
             metadata.provider = parsed.provider ?? metadata.provider;
             metadata.model = parsed.model ?? metadata.model;
+            console.log('[AIClient] 🏁 Done event received, provider:', metadata.provider);
+            
             onChunk({
               id: `chunk-${chunkId++}`,
-              content: "",
+              content: '',
               done: true,
             });
-          } else if (parsed.type === "error") {
-            throw new Error(parsed.error || "Unknown streaming error");
+          } else if (parsed.type === 'info') {
+            console.log('[AIClient] ℹ️ Info event received:', parsed.message);
+          } else if (parsed.type === 'error') {
+            console.error('[AIClient] ❌ Error event:', parsed.error);
+            throw new Error(parsed.error || 'Unknown streaming error');
+          } else {
+            console.log('[AIClient] 🤔 Unknown event type:', parsed.type);
           }
         } catch (parseError) {
-          console.warn("[AIClient] Malformed SSE event:", dataLine, parseError);
+          console.warn('[AIClient] ⚠️ Failed to parse SSE data:', dataLine, parseError);
         }
       }
     }
 
+    // Process any remaining data in buffer
     if (buffer.trim()) {
-      const lines = buffer.split("\n").filter((line) => line.trim());
+      console.log('[AIClient] 📦 Processing remaining buffer:', buffer.substring(0, 100));
+      const lines = buffer.split('\n');
       for (const line of lines) {
-        if (line.startsWith("data:")) {
-          const dataLine = line.replace(/^data:\s*/, "").trim();
-          try {
-            const parsed: SSEEvent = JSON.parse(dataLine);
-            if (parsed.type === "chunk" && parsed.content) {
-              fullText += parsed.content;
-            } else if (parsed.type === "done") {
-              metadata.provider = parsed.provider ?? metadata.provider;
-              metadata.model = parsed.model ?? metadata.model;
+        if (line.startsWith('data:')) {
+          const dataLine = line.substring(5).trim();
+          if (dataLine) {
+            try {
+              const parsed: SSEEvent = JSON.parse(dataLine);
+              if (parsed.type === 'chunk' && parsed.content) {
+                fullText += parsed.content;
+                hasReceivedContent = true;
+                onChunk({
+                  id: `chunk-${chunkId++}`,
+                  content: parsed.content,
+                  done: false,
+                });
+              } else if (parsed.type === 'done') {
+                metadata.provider = parsed.provider ?? metadata.provider;
+                metadata.model = parsed.model ?? metadata.model;
+              }
+            } catch (e) {
+              console.warn('[AIClient] ⚠️ Failed to parse final data:', dataLine);
             }
-          } catch {
-            // Ignore final malformed data
           }
         }
       }
@@ -236,8 +293,10 @@ async function parseSSEStream(
     reader.releaseLock();
   }
 
-  if (!fullText && metadata.provider === "unknown") {
-    throw new Error("Stream ended without receiving any data. The server may have crashed or the connection was interrupted.");
+  console.log('[AIClient] ✅ Stream complete, total content length:', fullText.length);
+
+  if (!hasReceivedContent && metadata.provider === 'unknown') {
+    throw new Error('Stream ended without receiving any content. The server may have crashed or the connection was interrupted.');
   }
 
   return { content: fullText, ...metadata };
@@ -317,7 +376,9 @@ export class AIClient {
       throw new Error(error.message);
     }
 
+    console.log('[AIClient] 🔄 Parsing SSE stream...');
     const { content, provider, model } = await parseSSEStream(response, onChunk);
+    console.log('[AIClient] ✅ Stream parsed, content length:', content.length);
 
     const id = crypto.randomUUID();
     const now = Date.now();

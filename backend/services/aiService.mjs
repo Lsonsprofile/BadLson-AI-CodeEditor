@@ -2,7 +2,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,7 +11,18 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
+// Only import Google GenAI if we have an API key
+let GoogleGenAI = null;
+if (GEMINI_API_KEY) {
+  try {
+    const module = await import('@google/genai');
+    GoogleGenAI = module.GoogleGenAI;
+  } catch (error) {
+    console.warn('⚠️ @google/genai not installed. Gemini support disabled.');
+  }
+}
+
+const geminiClient = GEMINI_API_KEY && GoogleGenAI ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
 // ─── CONFIG ─────────────────────────────────────────────────────────
 const TOKEN_BUDGET = {
@@ -22,7 +32,6 @@ const TOKEN_BUDGET = {
   TREE_MAX_FILES: 150,
 };
 
-// UPDATED July 2026 — verified free models on OpenRouter
 const DEFAULT_FREE_MODELS = [
   'meta-llama/llama-3.3-70b-instruct:free',
   'nvidia/nemotron-3-ultra-550b-a55b:free',
@@ -345,12 +354,13 @@ export async function getAvailableModels() {
       models: ['meta-llama/llama-4-scout-17b-16e-instruct'],
     },
     gemini: {
-      status: !!GEMINI_API_KEY ? 'ok' : 'not_configured',
+      status: !!GEMINI_API_KEY && geminiClient ? 'ok' : 'not_configured',
       models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
     },
   };
 }
 
+// ─── OPENROUTER API CALLS ──────────────────────────────────────────
 async function callOpenRouter(messages, preferredModel = null) {
   if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
 
@@ -408,7 +418,7 @@ async function callOpenRouter(messages, preferredModel = null) {
   throw lastError || new Error('All OpenRouter models failed');
 }
 
-// ─── OPENROUTER STREAMING (HARDENED) ──────────────────────────────
+// ─── OPENROUTER STREAMING ──────────────────────────────────────────
 async function streamOpenRouter(messages, onChunk, preferredModel = null) {
   if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
 
@@ -476,7 +486,6 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
             const parsed = JSON.parse(data);
             if (parsed.model) actualModel = parsed.model;
 
-            // Handle OpenRouter error objects inside stream
             if (parsed.error) {
               throw new Error(`OpenRouter stream error: ${JSON.stringify(parsed.error)}`);
             }
@@ -489,7 +498,6 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
             }
           } catch (parseErr) {
             if (parseErr.message?.includes('OpenRouter stream error')) throw parseErr;
-            // Skip invalid JSON lines
           }
         }
       }
@@ -515,43 +523,6 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
   }
 
   throw lastError || new Error('All OpenRouter stream models failed');
-}
-
-// ─── STREAM WITH FALLBACK (HARDENED) ──────────────────────────────
-export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null) {
-  const providers = [];
-  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
-  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
-  if (preferredProvider === 'gemini' && GEMINI_API_KEY) providers.push('gemini');
-
-  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
-  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
-  if (GEMINI_API_KEY && !providers.includes('gemini')) providers.push('gemini');
-
-  if (providers.length === 0) {
-    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.');
-  }
-
-  console.log(`[AI Service] streamWithFallback | providers=[${providers.join(', ')}] | preferredModel=${preferredModel || 'auto'}`);
-
-  let lastError;
-  for (const provider of providers) {
-    try {
-      console.log(`[AI Service] Trying provider: ${provider}`);
-      let result;
-      if (provider === 'openrouter') result = await streamOpenRouter(messages, onChunk, preferredModel);
-      else if (provider === 'groq') result = await streamGroq(messages, onChunk);
-      else if (provider === 'gemini') result = await streamGemini(messages, onChunk, preferredModel);
-
-      console.log(`[AI Service] Provider ${provider} succeeded | model=${result.model} | contentLength=${result.content?.length || 0}`);
-      return result;
-    } catch (error) {
-      console.warn(`[AI Service] Provider ${provider} stream failed:`, error.message);
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error('All AI provider streams failed');
 }
 
 // ─── GROQ ─────────────────────────────────────────────────────────
@@ -626,7 +597,7 @@ async function streamGroq(messages, onChunk) {
   return { content: cleanResponse(fullText), model: 'meta-llama/llama-4-scout-17b-16e-instruct', provider: 'groq' };
 }
 
-// ─── GEMINI ─────────────────────────────────────────────────────────
+// ─── GEMINI (Conditional) ─────────────────────────────────────────
 const GEMINI_SYSTEM = `You are a code editor AI. You MUST follow these rules EXACTLY:
 
 RULE 1: When changing code, use ONLY this format:
@@ -655,7 +626,7 @@ RULE 6: The edit block must contain the COMPLETE file content, not just changes.
 RULE 7: After giving code, say: **File Completed:** filename`;
 
 async function callGemini(messages, model = 'gemini-2.5-flash') {
-  if (!geminiClient) throw new Error('GEMINI_API_KEY not set');
+  if (!geminiClient) throw new Error('GEMINI_API_KEY not set or @google/genai not installed');
 
   const userMessages = messages.filter(m => m.role !== 'system');
   const fullPrompt = GEMINI_SYSTEM + '\n\n=== PROJECT CONTEXT ===\n' + 
@@ -676,7 +647,7 @@ async function callGemini(messages, model = 'gemini-2.5-flash') {
 }
 
 async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
-  if (!geminiClient) throw new Error('GEMINI_API_KEY not set');
+  if (!geminiClient) throw new Error('GEMINI_API_KEY not set or @google/genai not installed');
 
   const userMessages = messages.filter(m => m.role !== 'system');
   const fullPrompt = GEMINI_SYSTEM + '\n\n=== PROJECT CONTEXT ===\n' + 
@@ -702,6 +673,73 @@ async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
   }
 
   return { content: cleanResponse(fullText), model, provider: 'gemini' };
+}
+
+// ─── STREAM WITH FALLBACK ──────────────────────────────────────────
+export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null) {
+  const providers = [];
+  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
+  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
+  if (preferredProvider === 'gemini' && GEMINI_API_KEY && geminiClient) providers.push('gemini');
+
+  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
+  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
+  if (GEMINI_API_KEY && geminiClient && !providers.includes('gemini')) providers.push('gemini');
+
+  if (providers.length === 0) {
+    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.');
+  }
+
+  console.log(`[AI Service] streamWithFallback | providers=[${providers.join(', ')}] | preferredModel=${preferredModel || 'auto'}`);
+
+  let lastError;
+  for (const provider of providers) {
+    try {
+      console.log(`[AI Service] Trying provider: ${provider}`);
+      let result;
+      if (provider === 'openrouter') result = await streamOpenRouter(messages, onChunk, preferredModel);
+      else if (provider === 'groq') result = await streamGroq(messages, onChunk);
+      else if (provider === 'gemini') result = await streamGemini(messages, onChunk, preferredModel);
+
+      console.log(`[AI Service] Provider ${provider} succeeded | model=${result.model} | contentLength=${result.content?.length || 0}`);
+      return result;
+    } catch (error) {
+      console.warn(`[AI Service] Provider ${provider} stream failed:`, error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('All AI provider streams failed');
+}
+
+// ─── CALL WITH FALLBACK ────────────────────────────────────────────
+export async function callWithFallback(messages, preferredProvider = 'openrouter', preferredModel = null) {
+  const providers = [];
+  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
+  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
+  if (preferredProvider === 'gemini' && GEMINI_API_KEY && geminiClient) providers.push('gemini');
+
+  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
+  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
+  if (GEMINI_API_KEY && geminiClient && !providers.includes('gemini')) providers.push('gemini');
+
+  if (providers.length === 0) {
+    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.');
+  }
+
+  let lastError;
+  for (const provider of providers) {
+    try {
+      if (provider === 'openrouter') return await callOpenRouter(messages, preferredModel);
+      if (provider === 'groq') return await callGroq(messages, preferredModel);
+      if (provider === 'gemini') return await callGemini(messages, preferredModel);
+    } catch (error) {
+      console.warn(`Provider ${provider} failed:`, error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('All AI providers failed');
 }
 
 // ─── RESPONSE CLEANING & PARSING ────────────────────────────────────
@@ -860,41 +898,6 @@ function findCommonEnd(a, b, startOffset) {
   return i;
 }
 
-// ─── PROVIDER SELECTION & FALLBACK ─────────────────────────────────
-// ─── PROVIDER SELECTION & FALLBACK ─────────────────────────────────
-export async function callWithFallback(messages, preferredProvider = 'openrouter', preferredModel = null) {
-  // ... (implementation)
-}
-
-// ❌ DUPLICATE – DELETE THIS ENTIRE BLOCK
-export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null) {
-  const providers = [];
-  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
-  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
-  if (preferredProvider === 'gemini' && GEMINI_API_KEY) providers.push('gemini');
-
-  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
-  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
-  if (GEMINI_API_KEY && !providers.includes('gemini')) providers.push('gemini');
-
-  if (providers.length === 0) {
-    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.');
-  }
-
-  let lastError;
-  for (const provider of providers) {
-    try {
-      if (provider === 'openrouter') return await streamOpenRouter(messages, onChunk, preferredModel);
-      if (provider === 'groq') return await streamGroq(messages, onChunk);
-      if (provider === 'gemini') return await streamGemini(messages, onChunk, preferredModel);
-    } catch (error) {
-      console.warn(`Provider ${provider} stream failed:`, error.message);
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error('All AI provider streams failed');
-}
 // ─── TEST CONNECTION ────────────────────────────────────────────────
 export async function testConnection() {
   const results = {
@@ -931,7 +934,7 @@ export async function testConnection() {
     }
   }
 
-  if (GEMINI_API_KEY) {
+  if (GEMINI_API_KEY && geminiClient) {
     try {
       const result = await geminiClient.models.generateContent({
         model: 'gemini-2.5-flash',

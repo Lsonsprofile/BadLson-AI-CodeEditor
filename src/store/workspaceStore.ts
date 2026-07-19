@@ -49,6 +49,7 @@ export interface WorkspaceState {
   setAuthUser: (user: WorkspaceState['authUser']) => void;
   setWorkspaceState: (workspaceState: Partial<WorkspaceState>) => void;
   addChatMessage: (role: string, content: string) => void;
+  addMessage: (message: { role: string; content: string; timestamp?: number }) => void;
   setIsAiTyping: (typing: boolean) => void;
   clearChat: () => void;
   deleteFile: (filename: string) => void;
@@ -144,6 +145,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       addChatMessage: (role, content) =>
         set((state) => {
           const newMessage = { role, content, timestamp: Date.now() };
+          const trimmedHistory = [...state.chatHistory, newMessage].slice(-20);
+          return { chatHistory: trimmedHistory };
+        }),
+      // Add this new method for convenience
+      addMessage: (message) =>
+        set((state) => {
+          const newMessage = {
+            role: message.role,
+            content: message.content,
+            timestamp: message.timestamp || Date.now()
+          };
           const trimmedHistory = [...state.chatHistory, newMessage].slice(-20);
           return { chatHistory: trimmedHistory };
         }),

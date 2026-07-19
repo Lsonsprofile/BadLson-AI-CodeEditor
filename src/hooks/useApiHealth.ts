@@ -24,9 +24,9 @@ export interface UseApiHealthReturn {
 
 export function useApiHealth(options: UseApiHealthOptions = {}): UseApiHealthReturn {
   const {
-    // ✅ Use env var with local fallback
+    // ✅ FIXED: Don't add /api again since VITE_API_URL already includes it
     healthUrl = import.meta.env.VITE_API_URL
-      ? `${import.meta.env.VITE_API_URL}/api/health`
+      ? `${import.meta.env.VITE_API_URL}/health`
       : 'http://localhost:5002/api/health',
     pollingInterval = 30000,
     autoStart = true,

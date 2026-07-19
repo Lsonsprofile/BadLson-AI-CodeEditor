@@ -11,6 +11,8 @@ import { createServer } from 'http';
 import { testConnection } from './services/aiService.mjs';
 import fs from 'fs';
 
+import { verifyAuth } from './middleware/authMiddleware.mjs';
+import authRoutes from './routes/authRoutes.mjs';
 import aiRoutes from './routes/aiRoutes.mjs';
 import projectRoutes from './routes/projectRoutes.mjs';
 import uploadRoutes from './routes/uploadRoutes.mjs';
@@ -29,9 +31,11 @@ const PORT = process.env.PORT || 5002;
 
 // ─── ENV DEBUG ──────────────────────────────────────────────────────
 console.log('=== ENV DEBUG ===');
+console.log('JWT_SECRET exists?', !!process.env.JWT_SECRET);
 console.log('GROQ_API_KEY exists?', !!process.env.GROQ_API_KEY);
 console.log('GEMINI_API_KEY exists?', !!process.env.GEMINI_API_KEY);
 console.log('OPENROUTER_API_KEY exists?', !!process.env.OPENROUTER_API_KEY);
+console.log('NODE_ENV:', process.env.NODE_ENV || 'development');
 console.log('PORT:', PORT);
 console.log('=================');
 
@@ -56,7 +60,7 @@ const globalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
-  skip: (req) => req.path === '/api/health',
+  skip: (req) => req.path === '/api/health' || req.path === '/api/auth/login' || req.path === '/api/auth/register',
   validate: { xForwardedForHeader: false },
 });
 
@@ -78,9 +82,19 @@ const uploadLimiter = rateLimit({
   validate: { xForwardedForHeader: false },
 });
 
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // Stricter limit for auth endpoints
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authentication attempts, please try again later.' },
+  validate: { xForwardedForHeader: false },
+});
+
 app.use(globalLimiter);
-app.use('/api/ai', aiLimiter);
+app.use('/api/ai', aiLimiter); // AI rate limiter (no auth)
 app.use('/api/upload', uploadLimiter);
+app.use('/api/auth', authLimiter);
 
 // ─── CORS ───────────────────────────────────────────────────────────
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://badlson-ai-codeeditor.onrender.com';
@@ -107,8 +121,9 @@ app.use(cors({
 }));
 
 // ─── BODY PARSING ───────────────────────────────────────────────────
-app.use(express.json({ limit: '250mb' }));
-app.use(express.urlencoded({ extended: true, limit: '250mb' }));
+// Reduced limits for security (was 250mb)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ─── TIMEOUT & CONNECTION HANDLING ──────────────────────────────────
 app.use((req, res, next) => {
@@ -144,7 +159,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
   etag: false,
 }));
 
-// ─── HEALTH CHECK ───────────────────────────────────────────────────
+// ─── HEALTH CHECK (public) ──────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -155,8 +170,19 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ─── DIAGNOSTIC ───────────────────────────────────────────────────
-app.get('/api/diagnose', async (req, res) => {
+// ─── AUTH ROUTES (public) ──────────────────────────────────────────
+app.use('/api/auth', authRoutes);
+
+// ─── AI ROUTES (PUBLIC - NO AUTH REQUIRED) ─────────────────────────
+// AI should be accessible to everyone
+app.use('/api/ai', aiRoutes);
+
+// ─── PROTECTED ROUTES (auth required) ──────────────────────────────
+app.use('/api/projects', verifyAuth, projectRoutes);
+app.use('/api/upload', verifyAuth, uploadRoutes);
+
+// ─── DIAGNOSTIC (auth required in production) ──────────────────────
+app.get('/api/diagnose', verifyAuth, async (req, res) => {
   try {
     const results = await testConnection();
     const anyConfigured = results.openrouter?.status === 'ok' ||
@@ -188,7 +214,7 @@ app.get('/api/diagnose', async (req, res) => {
 });
 
 // ─── UPLOAD STATUS ENDPOINT ─────────────────────────────────────────
-app.get('/api/upload/status', (req, res) => {
+app.get('/api/upload/status', verifyAuth, (req, res) => {
   res.json({
     maxFileSize: 50 * 1024 * 1024,
     maxBatchSize: 500,
@@ -196,11 +222,6 @@ app.get('/api/upload/status', (req, res) => {
     supportsConcurrency: true,
   });
 });
-
-// ─── API ROUTES ─────────────────────────────────────────────────────
-app.use('/api/ai', aiRoutes);
-app.use('/api/projects', projectRoutes);
-app.use('/api/upload', uploadRoutes);
 
 // ─── 404 HANDLER ────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -267,20 +288,26 @@ server.on('error', (err) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 AI endpoints:`);
+  console.log(`🔐 Auth endpoints:`);
+  console.log(`   POST /api/auth/register - Register new user`);
+  console.log(`   POST /api/auth/login    - Login`);
+  console.log(`   GET  /api/auth/me       - Get current user profile (auth required)`);
+  console.log(`   POST /api/auth/logout   - Logout`);
+  console.log(`📡 AI endpoints (PUBLIC):`);
   console.log(`   POST /api/ai/chat     - Chat with code context`);
   console.log(`   POST /api/ai/stream   - Streaming chat (SSE)`);
   console.log(`   POST /api/ai/analyze  - Code analysis`);
   console.log(`   POST /api/ai/explain  - Code explanation`);
   console.log(`   GET  /api/ai/models   - Available AI models`);
-  console.log(`📁 Upload endpoints:`);
+  console.log(`📁 Upload endpoints (AUTH REQUIRED):`);
   console.log(`   POST /api/upload/file         - Single file upload`);
   console.log(`   POST /api/upload/zip          - ZIP file extraction`);
   console.log(`   POST /api/upload/folder       - Direct folder upload`);
   console.log(`   POST /api/upload/folder-batch - Batch folder upload`);
   console.log(`   GET  /api/upload/status       - Upload configuration`);
-  console.log(`🔍 Health: GET /api/health`);
-  console.log(`🔍 Diagnose: GET /api/diagnose`);
+  console.log(`🔍 Health: GET /api/health (public)`);
+  console.log(`🔍 Diagnose: GET /api/diagnose (auth required)`);
+  console.log(`📋 Note: AI endpoints are PUBLIC. Uploads require authentication.`);
 });
 
 // ─── GRACEFUL SHUTDOWN ──────────────────────────────────────────────
