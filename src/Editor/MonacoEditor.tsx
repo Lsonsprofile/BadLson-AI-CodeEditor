@@ -1,11 +1,13 @@
+// src/Editor/MonacoEditor.tsx
 import { useRef, useEffect, useCallback, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type { editor as MonacoEditorType } from 'monaco-editor';
-import { useWorkspaceStore } from '../../store/workspaceStore';
-import { useEditorStore } from '../../store/editorStore';
-import { getFileLanguage } from '../../utils/formatter';
-import { formatHTML, formatCSS, formatJS } from '../../utils/formatter';
-import { getContent, saveContent } from '../../lib/fileStorage';
+// ✅ Fixed: From src/Editor/ go up 2 levels to reach src/
+import { useWorkspaceStore } from '../store/workspaceStore';
+import { useEditorStore } from '../store/editorStore';
+import { getFileLanguage } from '../utils/formatter';
+import { formatHTML, formatCSS, formatJS } from '../utils/formatter';
+import { getContent, saveContent } from '../lib/fileStorage';
 
 export default function MonacoEditorComponent() {
   const editorRef = useRef<MonacoEditorType.IStandaloneCodeEditor | null>(null);

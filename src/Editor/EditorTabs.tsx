@@ -1,6 +1,8 @@
+// src/Editor/EditorTabs.tsx
 import { X, FileText } from 'lucide-react';
-import { useWorkspaceStore } from '../../store/workspaceStore';
-import { getFileLanguage } from '../../utils/formatter';
+// ✅ Fixed: From src/Editor/ go up 2 levels to reach src/
+import { useWorkspaceStore } from '../store/workspaceStore';
+import { getFileLanguage } from '../utils/formatter';
 
 const langColors: Record<string, string> = {
   html: 'text-orange-400',
@@ -19,7 +21,7 @@ export default function EditorTabs() {
 
   return (
     <div className="flex items-center bg-[#0e121f] border-b border-[#1e293b] overflow-x-auto no-scrollbar">
-      {openFiles.map((filename) => {
+      {openFiles.map((filename: string) => {
         const lang = getFileLanguage(filename);
         const isActive = activeFile === filename;
 

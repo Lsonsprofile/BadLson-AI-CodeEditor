@@ -1,7 +1,8 @@
-// src/components/Editor/FileTabs.tsx
+// src/Editor/FileTabs.tsx
 import { useState } from 'react';
 import { FileCode, Layout, Type, Braces, Image, Plus, X } from 'lucide-react';
-import { useWorkspaceStore } from '../../store/workspaceStore';
+// ✅ Fixed: From src/Editor/ go up 2 levels to reach src/
+import { useWorkspaceStore } from '../store/workspaceStore';
 
 export default function FileTabs() {
   const { openFiles, activeFile, openFile, closeFile, updateFile } = useWorkspaceStore();
@@ -28,7 +29,7 @@ export default function FileTabs() {
 
   return (
     <div className="flex items-center gap-1 px-2 py-1 bg-[#0e121f] border-b border-[#1e293b]">
-      {openFiles.map((filename) => {
+      {openFiles.map((filename: string) => {
         const isActive = activeFile === filename;
 
         return (

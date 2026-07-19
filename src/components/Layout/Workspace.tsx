@@ -1,7 +1,9 @@
+// src/components/Layout/Workspace.tsx
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
-import EditorTabs from '../Editor/EditorTabs';
-import MonacoEditorComponent from '../Editor/MonacoEditor';
+// ✅ FIXED: Go up 2 levels to src/, then into Editor/
+import EditorTabs from '../../Editor/EditorTabs';
+import MonacoEditorComponent from '../../Editor/MonacoEditor';
 import LivePreview from '../Preview/LivePreview';
 import { getFileLanguage } from '../../utils/formatter';
 
