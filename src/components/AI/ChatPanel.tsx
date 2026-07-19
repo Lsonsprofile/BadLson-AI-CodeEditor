@@ -203,7 +203,7 @@ function MarkdownText({ text }: { text: string }) {
   return <div className="text-sm text-slate-200 leading-relaxed" dangerouslySetInnerHTML={{ __html: rendered }} />;
 }
 
-// ─── MESSAGE METADATA STORE (outside component for persistence across renders) ───
+// ─── MESSAGE METADATA STORE ────────────────────────────────────────
 
 const messageMetadataStore = new Map<number, {
   provider?: string;
@@ -424,7 +424,11 @@ export default function ChatPanel() {
       const projectFiles = buildProjectFiles();
       console.log(`📁 Sending ${Object.keys(projectFiles).length} files`);
 
-      const response = await fetch('http://localhost:5002/api/ai/chat', {
+      // ✅ FIXED: Use environment variable, NOT hardcoded localhost
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
+      console.log('🌐 Using API URL:', API_URL);
+
+      const response = await fetch(`${API_URL}/ai/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -469,12 +473,12 @@ export default function ChatPanel() {
         setLastContext(data.fileContext);
       }
 
-      // Add AI response (store metadata separately)
+      // Add AI response
       if (responseMessage) {
         addChatMessage('ai', responseMessage);
         
-        // Store metadata for this message by index
-        const messageIndex = chatHistory.length; // Will be the index after adding
+        // Store metadata
+        const messageIndex = chatHistory.length;
         messageMetadataStore.set(messageIndex, {
           provider: data.provider,
           model: data.model,
@@ -497,11 +501,11 @@ export default function ChatPanel() {
       
       let errorResponse = `⚠️ **Error:** ${msg}`;
       if (msg.includes('timeout') || msg.includes('ECONNREFUSED')) {
-        errorResponse += '\n\n💡 **Try:** Check if the backend server is running on port 5002, or switch AI providers.';
+        errorResponse += '\n\n💡 **Try:** Check if the backend server is running, or switch AI providers.';
       } else if (msg.includes('API key') || msg.includes('not_configured')) {
-        errorResponse += '\n\n💡 **Try:** Add your API key to `backend/.env` or enable `MOCK_AI=true` for testing.';
+        errorResponse += '\n\n💡 **Try:** Add your API key or enable `MOCK_AI=true`.';
       } else if (msg.includes('too large') || msg.includes('MAX_TOTAL_CHARS')) {
-        errorResponse += '\n\n💡 **Try:** Close some files or ask about a specific file instead of the whole project.';
+        errorResponse += '\n\n💡 **Try:** Close some files or ask about a specific file.';
       }
       
       addChatMessage('ai', errorResponse);
@@ -760,7 +764,7 @@ export default function ChatPanel() {
                       )}
                     </div>
 
-                    {/* Message content with markdown/code/wireframe support */}
+                    {/* Message content */}
                     <MessageContent 
                       content={msg.content} 
                       wireframes={metadata?.wireframes} 
@@ -783,7 +787,7 @@ export default function ChatPanel() {
                       )}
                     </div>
 
-                    {/* Edit summary if applicable */}
+                    {/* Edit summary */}
                     {metadata?.edits && metadata.edits.length > 0 && (
                       <div className="mt-2 pt-2 border-t border-[#1e293b]/50">
                         <div className="text-[9px] text-emerald-400/70 flex items-center gap-1">

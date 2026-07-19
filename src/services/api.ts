@@ -3,14 +3,17 @@ import { getContent } from '../lib/fileStorage';
 import { useWorkspaceStore } from '../store/workspaceStore';
 
 // ─── API BASE URL ──────────────────────────────────────────────────
-// ✅ FIXED: Must include /api
+// ✅ FIXED: Use environment variable with proper fallback
 const API_BASE_URL = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL
   : import.meta.env.DEV
     ? 'http://localhost:5002/api'
-    : (() => { throw new Error('VITE_API_URL is not defined. Set it in your .env file.'); })();
+    : 'https://badlson-backend.onrender.com/api'; // ✅ Production fallback
 
 console.log('🔗 API_BASE_URL:', API_BASE_URL);
+
+// Export for use in other files
+export { API_BASE_URL };
 
 // ─── AUTH TOKEN MANAGEMENT ──────────────────────────────────────────
 
