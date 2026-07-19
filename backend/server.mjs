@@ -100,18 +100,39 @@ app.use('/api/auth', authLimiter);
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://badlson-ai-codeeditor.onrender.com';
 const allowedOrigins = [
   FRONTEND_URL,
+  // ✅ Add your actual Render URLs
+  'https://badlson-ai-codeeditor.onrender.com',
+  'https://badlson-frontend.onrender.com',
+  // ✅ Local development
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
   'http://127.0.0.1:3000',
 ].filter(Boolean);
 
+console.log('✅ CORS allowed origins:', allowedOrigins);
+
 app.use(cors({
   origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
+    
+    // Check if origin is allowed
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (!allowed) return false;
+      // Exact match
+      if (origin === allowed) return true;
+      // Origin starts with allowed (e.g., https://badlson-ai-codeeditor.onrender.com)
+      if (origin.startsWith(allowed)) return true;
+      // Allowed starts with origin
+      if (allowed.startsWith(origin)) return true;
+      return false;
+    });
+    
+    if (isAllowed) {
       return callback(null, true);
     }
+    
     console.warn(`⚠️ CORS blocked request from: ${origin}`);
     callback(new Error(`CORS policy: ${origin} not allowed`));
   },
