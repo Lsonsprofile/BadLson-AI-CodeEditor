@@ -10,8 +10,7 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node --watch server.mjs",
-    "build": "echo 'No build step required for backend'",
-    "test": "echo 'No tests configured'"
+    "build": "echo 'No build step required for backend'"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
