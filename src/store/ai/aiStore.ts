@@ -12,9 +12,9 @@ import type {
   AISuggestion,
   AIDiagnostic,
 } from './ai.types';
-import { aiClient } from '@/ai/client';
-import { toProviderRequest } from '@/ai/requestAdapter';
-import { useWorkspaceStore } from '@/store/workspaceStore';
+import { aiClient } from '../../ai/client';
+import { toProviderRequest } from '../../ai/requestAdapter';
+import { useWorkspaceStore } from '../workspaceStore';
 
 export type AIStatus =
   | 'idle'
@@ -74,9 +74,9 @@ interface AIStore extends ExtendedAIState {
 
 const DEFAULT_PROVIDER_CONFIG = Object.freeze({
   provider: 'openrouter',
-  model: 'tencent/hy3:free', // ✅ Changed from deepseek to working model
+  model: 'tencent/hy3:free',
   temperature: 0.7,
-  maxTokens: 4096,
+  maxTokens: 8192,
   topP: 1,
   stream: true,
   enabled: true,
@@ -140,7 +140,9 @@ export const useAIStore = create<AIStore>()(
       setConversation: (conversationId) => set({ conversationId }),
 
       addMessage: (message) =>
-        set((state) => ({ messages: [...state.messages, message] })),
+        set((state) => ({
+          messages: [...state.messages, message],
+        })),
 
       updateLastMessage: (content, role = 'assistant') =>
         set((state) => {
@@ -256,6 +258,8 @@ export const useAIStore = create<AIStore>()(
           providerConfig: state.providerConfig,
         })),
 
+      // ─── SEND MESSAGE ──────────────────────────────────────────
+
       sendMessage: async (content: string) => {
         if (get().loading) {
           throw new Error('Already processing a message');
@@ -288,14 +292,24 @@ export const useAIStore = create<AIStore>()(
           const storeState = get();
           const workspace = useWorkspaceStore.getState();
 
+          // ✅ Build project files from workspace
+          const projectFiles: Record<string, string> = {};
+          for (const [path, content] of Object.entries(workspace.files)) {
+            if (content && typeof content === 'string' && content.trim()) {
+              projectFiles[path] = content;
+            }
+          }
+
+          console.log(`📁 Sending ${Object.keys(projectFiles).length} files to AI`);
+
           const request: AIRequest = {
             id: crypto.randomUUID(),
             provider: storeState.provider,
             model: storeState.model,
             messages: conversation,
-            projectFiles: workspace.files,
+            projectFiles: projectFiles,
             activeFile: workspace.activeFile || null,
-            recentFiles: workspace.openFiles,
+            recentFiles: workspace.openFiles.slice(-5),
             folders: workspace.folders,
             selectedCode: null,
             consoleErrors: [],
@@ -351,6 +365,7 @@ export const useAIStore = create<AIStore>()(
             }));
           });
 
+          // ✅ Finalize
           const finalMessages = get().messages;
           const finalAssistant = finalMessages.find((m) => m.id === assistantId);
           if (finalAssistant) {
@@ -385,6 +400,19 @@ export const useAIStore = create<AIStore>()(
           abortController = null;
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
+          
+          // ✅ Update assistant with error message
+          const currentMessages = get().messages;
+          const assistantIndex = currentMessages.findIndex((m) => m.id === assistantId);
+          if (assistantIndex !== -1) {
+            const updatedMessages = [...currentMessages];
+            updatedMessages[assistantIndex] = {
+              ...updatedMessages[assistantIndex],
+              content: `⚠️ **Error:** ${errorMessage}\n\n💡 **Tips:**\n- Make sure backend is running: \`npm run dev:server\`\n- Check API keys in \`backend/.env\`\n- Try \`MOCK_AI=true\` for testing`,
+            };
+            set({ messages: updatedMessages });
+          }
+
           set({
             loading: false,
             isTyping: false,
@@ -410,8 +438,35 @@ export const useAIStore = create<AIStore>()(
         });
       },
 
-      sendRequest: async () => {
-        throw new Error('Not implemented');
+      sendRequest: async (request: AIRequest) => {
+        try {
+          set({ loading: true, status: 'sending', lastError: null });
+          
+          const providerRequest = toProviderRequest(request);
+          const response = await aiClient.send(providerRequest);
+          
+          // Add assistant message
+          const assistantMessage: AIMessage = {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: response.message.content,
+            timestamp: Date.now(),
+          };
+          
+          set((state) => ({
+            messages: [...state.messages, assistantMessage],
+            loading: false,
+            status: 'completed',
+          }));
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          set({ 
+            loading: false, 
+            status: 'error', 
+            lastError: errorMessage 
+          });
+          throw error;
+        }
       },
     }),
     {

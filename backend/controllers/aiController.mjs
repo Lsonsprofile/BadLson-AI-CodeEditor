@@ -89,7 +89,7 @@ function analyzeHtmlStructure(htmlContent) {
   // Count main structural elements
   const mainTags = ['header', 'nav', 'main', 'section', 'article', 'aside', 'footer', 'div'];
   for (const tag of mainTags) {
-    const count = (htmlContent.match(new RegExp(`<${tag}[\\s>]`, 'gi')) || []).length;
+    const count = (htmlContent.match(new RegExp(`<${tag}[\s>]`, 'gi')) || []).length;
     if (count > 0) {
       structure.mainSections.push({ tag, count });
     }
@@ -175,13 +175,7 @@ export async function handleChat({
 }) {
   console.log(`[AI Controller] handleChat | message="${message.substring(0, 60)}..." | files=${Object.keys(projectFiles).length} | provider=${provider}`);
 
-  // Build rich file context
-  const fileContext = buildFileContext(projectFiles, activeFile, recentFiles);
-
-  // Enhance prompt with file context analysis
-  const contextEnhancement = buildContextEnhancement(fileContext, projectFiles);
-
-  // Build the prompt with file context
+  // Build the prompt first to detect mode
   const { messages, mode } = buildPrompt(projectFiles, message, {
     activeFile,
     recentFiles,
@@ -192,11 +186,16 @@ export async function handleChat({
     chatHistory,
   });
 
-  // Prepend context enhancement to the last user message
-  if (contextEnhancement && messages.length > 0) {
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg.role === 'user') {
-      lastMsg.content = contextEnhancement + '\n\n' + lastMsg.content;
+  // Only build and prepend context enhancement for CODE modes (not general)
+  if (mode !== 'general') {
+    const fileContext = buildFileContext(projectFiles, activeFile, recentFiles);
+    const contextEnhancement = buildContextEnhancement(fileContext, projectFiles);
+
+    if (contextEnhancement && messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === 'user') {
+        lastMsg.content = contextEnhancement + '\n\n' + lastMsg.content;
+      }
     }
   }
 
@@ -230,11 +229,11 @@ export async function handleChat({
     },
     updatedFiles: Object.keys(updatedFiles).length > 0 ? updatedFiles : undefined,
     wireframes: parsed.wireframes.length > 0 ? parsed.wireframes : undefined,
-    fileContext: {
+    fileContext: mode !== 'general' ? {
       analyzed: true,
-      fileCount: fileContext.fileCount,
-      htmlAnalyzed: !!fileContext.htmlStructure,
-    },
+      fileCount: Object.keys(projectFiles).length,
+      htmlAnalyzed: !!projectFiles['index.html'],
+    } : undefined,
     timestamp: new Date().toISOString(),
   };
 
@@ -261,11 +260,7 @@ export async function handleStream({
 }) {
   console.log(`[AI Controller] handleStream | message="${message.substring(0, 60)}..." | files=${Object.keys(projectFiles).length}`);
 
-  // Build rich file context
-  const fileContext = buildFileContext(projectFiles, activeFile, recentFiles);
-  const contextEnhancement = buildContextEnhancement(fileContext, projectFiles);
-
-  // Build the prompt
+  // Build the prompt first to detect mode
   const { messages, mode } = buildPrompt(projectFiles, message, {
     activeFile,
     recentFiles,
@@ -276,11 +271,16 @@ export async function handleStream({
     chatHistory,
   });
 
-  // Prepend context enhancement
-  if (contextEnhancement && messages.length > 0) {
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg.role === 'user') {
-      lastMsg.content = contextEnhancement + '\n\n' + lastMsg.content;
+  // Only build and prepend context enhancement for CODE modes (not general)
+  if (mode !== 'general') {
+    const fileContext = buildFileContext(projectFiles, activeFile, recentFiles);
+    const contextEnhancement = buildContextEnhancement(fileContext, projectFiles);
+
+    if (contextEnhancement && messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === 'user') {
+        lastMsg.content = contextEnhancement + '\n\n' + lastMsg.content;
+      }
     }
   }
 
@@ -328,11 +328,11 @@ export async function handleStream({
     },
     updatedFiles: Object.keys(updatedFiles).length > 0 ? updatedFiles : undefined,
     wireframes: parsed.wireframes.length > 0 ? parsed.wireframes : undefined,
-    fileContext: {
+    fileContext: mode !== 'general' ? {
       analyzed: true,
-      fileCount: fileContext.fileCount,
-      htmlAnalyzed: !!fileContext.htmlStructure,
-    },
+      fileCount: Object.keys(projectFiles).length,
+      htmlAnalyzed: !!projectFiles['index.html'],
+    } : undefined,
   };
 
   if (onComplete) onComplete(finalResult);

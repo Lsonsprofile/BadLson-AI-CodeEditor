@@ -6,10 +6,10 @@
 export type AIProvider = 'openrouter' | 'groq' | 'gemini';
 
 export interface AIMessage {
+  id?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp?: number;
-  id?: string;
 }
 
 export interface AIRequest {
@@ -18,7 +18,7 @@ export interface AIRequest {
   model: string;
   messages: AIMessage[];
 
-  // ✅ NEW: Project context fields for backend awareness
+  // ✅ Project context fields for backend awareness
   projectFiles: Record<string, string>;
   activeFile: string | null;
   recentFiles: string[];
@@ -38,7 +38,7 @@ export interface AIRequest {
     stream?: boolean;
   };
   timestamp: number;
-  signal?: AbortSignal; // ✅ enables clean cancellation for streaming and requests
+  signal?: AbortSignal;
 }
 
 export interface AIStreamState {
@@ -86,5 +86,4 @@ export interface AIState {
   providerConfig: AIProviderConfig;
   loading: boolean;
   lastError: string | null;
-  // editorContext removed – editor state lives exclusively in editorStore
 }

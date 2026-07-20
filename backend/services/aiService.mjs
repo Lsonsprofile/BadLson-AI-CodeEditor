@@ -10,22 +10,21 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const MOCK_AI = process.env.MOCK_AI === 'true';
+const MOCK_MODE = process.env.MOCK_AI === 'true';
 
-// Only import Google GenAI if we have an API key
+// ─── Lazy import for Gemini ────────────────────────────────────────
 let GoogleGenAI = null;
 if (GEMINI_API_KEY) {
   try {
     const module = await import('@google/genai');
     GoogleGenAI = module.GoogleGenAI;
-  } catch (error) {
+  } catch {
     console.warn('⚠️ @google/genai not installed. Gemini support disabled.');
   }
 }
-
 const geminiClient = GEMINI_API_KEY && GoogleGenAI ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
-// ─── CONFIG ─────────────────────────────────────────────────────────
+// ─── CONSTANTS ──────────────────────────────────────────────────────
 const TOKEN_BUDGET = {
   MAX_TOTAL_CHARS: 120000,
   MAX_FILE_CHARS: 10000,
@@ -42,289 +41,92 @@ const DEFAULT_FREE_MODELS = [
   'qwen/qwen3-next-80b-a3b-instruct:free',
   'google/gemma-4-31b-it:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
+  'deepseek/deepseek-chat-v3-0324:free',
+  'microsoft/phi-3-medium-128k-instruct:free',
+  'google/gemma-2-9b-it:free',
+  'mistralai/mistral-7b-instruct:free',
 ];
 
 let cachedFreeModels = null;
 let lastModelFetch = 0;
 const MODEL_CACHE_TTL_MS = 1000 * 60 * 30;
 
-// ─── ENHANCED SYSTEM PROMPTS ────────────────────────────────────────
-const BASE_SYSTEM = `You are an Expert Senior Full-Stack Developer working inside BadLson AI Code Editor.
+// ─── PERSONALITY & SYSTEM PROMPTS ────────────────────────────────
 
-TECH STACK: JavaScript ES6+, TypeScript, React, HTML5, CSS/Tailwind, Node.js, Express, MongoDB, PostgreSQL.
+/** New general‑purpose personality for non‑code questions */
+const GENERAL_PERSONALITY = `You are a helpful assistant having a natural conversation with a developer.
 
-🧠 CAPABILITIES:
-- You can READ any file in the project by referencing its path
-- You can GENERATE complete code files (100-500+ lines)
-- You can CREATE wireframes and UI mockups using ASCII/HTML
-- You can PERFORM smart edits — modify ONLY the necessary lines in large files
-- You can ANALYZE HTML structure, DOM hierarchy, and CSS layouts
-- You can COPY code from one file and PASTE/adapt it to another
+HOW TO RESPOND:
+- Answer the user's question directly and concisely.
+- Do NOT analyze, summarize, or reference their codebase.
+- Do NOT mention their project, files, or tech stack unless they ask.
+- Keep responses conversational and natural.
+- If they ask a math question, just give the answer.
+- If they say "hello", just greet them back normally.
+- Think out loud only when it helps the user understand your reasoning.
+- Ask follow‑up questions naturally when you need more info.`;
 
-⚡ CORE RULES — FOLLOW EXACTLY:
-1. You MUST write COMPLETE, PRODUCTION-READY code
-2. You can write 100-500+ lines of code per file
-3. Use \`\`\`edit:FULL_FILE_PATH blocks for ALL code changes
-4. For SMART EDITS (modifying only specific lines in large files), use \`\`\`patch:FULL_FILE_PATH format
-5. Include proper error handling, type safety, and performance optimizations
-6. Add comments for complex logic
-7. Follow best practices and design patterns
-8. NEVER use placeholders like "// rest of code" — write EVERYTHING
-9. If replacing a file, provide the COMPLETE new content
-10. You can create new files with \`\`\`edit:path/to/newfile.ext
-11. ALWAYS provide the FULL file content for edit blocks, not just changes
-12. When reading files, reference them by path and quote relevant sections
+/** Calm, professional code‑focused personality (toned down from emoji‑heavy version) */
+const BASE_SYSTEM = `You are an experienced software engineer pair‑programming with another developer. 
+You work inside the BadLson AI Code Editor.
 
-📁 FILE RULES:
-- For React components: include imports, types, component logic, and export
-- For CSS: include all styles, responsive design, and animations
-- For Node.js: include proper error handling, async/await, and exports
-- For TypeScript: include proper types, interfaces, and generics
-- For HTML: analyze structure, suggest semantic improvements, accessibility fixes
+TECH STACK: JavaScript ES6+, TypeScript, React, HTML5, CSS/Tailwind, Node.js, Express.
 
-🔄 EDIT BLOCK FORMATS:
+RULES FOR CODE CHANGES (STRICT):
+- Use ONLY \`\`\`edit:FULL_FILE_PATH blocks for code changes.
+- Never output raw suggestions as comments.
+- Never output "Copy" or "Apply" buttons.
+- If you cannot determine the exact change, ask the user.
+- Work on ONE file at a time per response.
+- After completing a file, say: **File Completed:** filename.
+- Explain your reasoning before showing code.
+- When fixing bugs, change only the necessary lines — not the whole file.
 
-1. FULL FILE REPLACEMENT (for new files or complete rewrites):
-\`\`\`edit:src/components/MyComponent.tsx
-import React, { useState, useEffect } from 'react';
-
-interface MyComponentProps {
-  title: string;
-  onAction: () => void;
-}
-
-export function MyComponent({ title, onAction }: MyComponentProps) {
-  const [count, setCount] = useState(0);
-  
-  useEffect(() => {
-    // Effect logic
-  }, []);
-  
-  return (
-    <div className="container">
-      <h1>{title}</h1>
-      <button onClick={onAction}>Action</button>
-    </div>
-  );
-}
-
-export default MyComponent;
-\`\`\`
-
-2. SMART PATCH (for modifying only specific lines in large files):
-\`\`\`patch:src/components/LargeComponent.tsx
---- a/src/components/LargeComponent.tsx
-+++ b/src/components/LargeComponent.tsx
-@@ -45,7 +45,9 @@
-   const [data, setData] = useState(null);
-   
-   useEffect(() => {
--    fetchData();
-+    fetchData().catch(err => {
-+      console.error('Failed to fetch:', err);
-+      setError(err.message);
-+    });
-   }, []);
-\`\`\`
-
-3. WIREFRAME/MOCKUP:
-\`\`\`wireframe:Dashboard Layout
-+------------------------------------------+
-|  LOGO    Dashboard    [User] [Settings]  |
-+------------------------------------------+
-|                                          |
-|  +----------+  +----------+  +--------+  |
-|  |  Card 1  |  |  Card 2  |  | Chart  |  |
-|  |  $1,234  |  |  $5,678  |  |  📈   |  |
-|  +----------+  +----------+  +--------+  |
-|                                          |
-|  +------------------------------------+  |
-|  |         Recent Activity            |  |
-|  |  • User signed up                  |  |
-|  |  • Payment received                |  |
-|  +------------------------------------+  |
-|                                          |
-+------------------------------------------+
-\`\`\`
-
-**File Completed:** src/components/MyComponent.tsx
-
-When providing code, ALWAYS:
-1. Explain your approach briefly
-2. Show the complete file with \`\`\`edit:path format OR smart patch with \`\`\`patch:path format
-3. Say **File Completed:** filename when done
-4. If multiple files, work on ONE at a time
-5. For large files (>100 lines), prefer PATCH format to minimize changes
-
-Never output raw suggestions. Always use edit or patch blocks.`;
+TONE: Be professional, calm, and focused.`;
 
 const MODE_PROMPTS = {
-  code: `${BASE_SYSTEM}
-
-MODE: CODE GENERATION & FILE REPLACEMENT
-You are writing NEW code or COMPLETELY REPLACING existing files.
-- Write complete, working, production-ready code
-- Generate 100-500+ lines when needed
-- Include all imports, types, logic, and exports
-- Use proper error handling and async patterns
-- Add TypeScript types for all props and state
-- Include responsive design and accessibility
-- Write clean, maintainable, and well-commented code
-- NEVER use "..." or "// rest of code" placeholders
-- ALWAYS provide the FULL file content
-- For large existing files, use PATCH format to modify only necessary lines`,
-
-  debug: `${BASE_SYSTEM}
-
-MODE: DEBUGGING & FIXING CODE
-You are fixing bugs and errors in existing code.
-1. Identify the root cause of the issue
-2. For small fixes in large files, use \`\`\`patch:path format
-3. For complete rewrites, use \`\`\`edit:path format
-4. Explain what was wrong and why your fix works
-5. Include all necessary code context
-6. Suggest how to prevent similar issues
-7. Write the FULL corrected file content OR precise patch`,
-
-  review: `${BASE_SYSTEM}
-
-MODE: CODE REVIEW & REFACTORING
-Analyze and improve existing code:
-1. Identify: bugs, security issues, performance problems, maintainability issues
-2. Provide the COMPLETE REFACTORED file with \`\`\`edit:path OR precise \`\`\`patch:path
-3. Explain each improvement
-4. Include all code, not just changes
-5. Suggest better patterns and practices`,
-
-  explain: `${BASE_SYSTEM}
-
-MODE: EXPLANATION
-Break down complex code or concepts into simple steps:
-- Use actual project code as examples
-- Explain how things work
-- Show code with \`\`\`edit:path when demonstrating changes
-- Provide complete examples when needed
-- Analyze HTML structure, DOM hierarchy, CSS cascade
-- Explain file relationships and imports`,
-
-  design: `${BASE_SYSTEM}
-
-MODE: ARCHITECTURE & DESIGN
-Design scalable, maintainable, secure systems:
-- Consider: performance, security, scalability, maintainability
-- Provide complete code examples with \`\`\`edit:path
-- Explain tradeoffs and decisions
-- Write full implementation files
-- Create wireframes using \`\`\`wireframe: format when helpful`,
-
-  wireframe: `${BASE_SYSTEM}
-
-MODE: WIREFRAME & UI DESIGN
-Create visual mockups and wireframes:
-- Use \`\`\`wireframe:Title format for ASCII mockups
-- Describe color schemes, spacing, and layout
-- Suggest Tailwind classes for implementation
-- Provide the actual code with \`\`\`edit:path
-- Consider responsive breakpoints`,
-
-  error: `${BASE_SYSTEM}
-
-MODE: ERROR RESPONSE
-The user's code has errors. Use provided error info to:
-1. Diagnose the root cause
-2. Provide the COMPLETE FIXED file with \`\`\`edit:path OR \`\`\`patch:path
-3. Explain what was wrong
-4. Show the full corrected file content or precise patch`,
-
+  code: `${BASE_SYSTEM}\n\nMODE: CODE GENERATION\nYou are writing new code or modifying existing code.\n- Provide complete, working, production‑ready code inside edit blocks.\n- Follow best practices: error handling, type safety, performance.\n- If the request is vague, ask clarifying questions first.`,
+  debug: `${BASE_SYSTEM}\n\nMODE: DEBUGGING\nYou are helping fix a bug or error.\n1. First, explain what you think is causing the issue.\n2. Then provide the fix using \`\`\`edit:path format ONLY.\n3. Explain why the fix works.\n4. Suggest how to prevent similar issues.\n\nIf you need error messages, console logs, or specific file content → ask for them.`,
+  review: `${BASE_SYSTEM}\n\nMODE: CODE REVIEW\nAnalyze and report on: bugs, security vulnerabilities, performance problems, maintainability, TypeScript type safety.\nFor each issue: explain the problem, show corrected code with \`\`\`edit:path ONLY, explain why it's better.`,
+  explain: `${BASE_SYSTEM}\n\nMODE: EXPLANATION\nBreak complex topics into simple steps. Use actual project code as examples. NO edit blocks needed unless user asks for code changes.`,
+  design: `${BASE_SYSTEM}\n\nMODE: ARCHITECTURE/DESIGN\nConsider scalability, maintainability, security. Explain tradeoffs. Do NOT write full implementation unless asked.`,
+  error: `${BASE_SYSTEM}\n\nMODE: ERROR RESPONSE\nThe user's code has errors. Use provided error info to diagnose, identify root cause, explain what's wrong, provide fix with \`\`\`edit:path ONLY.`,
+  general: GENERAL_PERSONALITY,
   generic: BASE_SYSTEM,
 };
 
+// ─── MODE DETECTION ────────────────────────────────────────────────
+
 function detectMode(userMessage, context = {}) {
-  const msg = userMessage.toLowerCase();
+  const msg = userMessage.toLowerCase().trim();
+
+  // GENERAL QUESTIONS — no project context needed
+  const generalPatterns = [
+    /^hello\b/, /^hi\b/, /^hey\b/, /^how are you\b/,
+    /^\d+\s*[\+\-\*\/]\s*\d+/,           // "2 + 2", "5 * 3"
+    /what is \d+/, /what's \d+/,         // "what is 2 plus 2"
+    /who (is|are|was|were)/,             // "who is..."
+    /where (is|are)/, /when (did|was)/,
+    /why (is|are|does|do)/,
+    /tell me about yourself/, /what can you do/,
+    /thank you/, /thanks/,
+    /good morning/, /good afternoon/, /good evening/,
+    /what's up/, /how's it going/,
+    /^(yes|no|maybe|ok|sure|great|cool|nice)\b/,
+  ];
+  if (generalPatterns.some(p => p.test(msg))) return 'general';
+
   if (context.consoleErrors?.length || context.buildErrors?.length) return 'error';
-  if (msg.includes('wireframe') || msg.includes('mockup') || msg.includes('layout') || msg.includes('design ui')) return 'wireframe';
   if (msg.includes('review') || msg.includes('check this code')) return 'review';
-  if (msg.includes('explain') || msg.includes('how does') || msg.includes('what is') || msg.includes('structure')) return 'explain';
-  if (msg.includes('design') || msg.includes('architecture')) return 'design';
+  if (msg.includes('explain') || msg.includes('how does') || msg.includes('what is')) return 'explain';
+  if (msg.includes('design') || msg.includes('architecture') || msg.includes('structure')) return 'design';
   if (msg.includes('fix') || msg.includes('bug') || msg.includes('error') || msg.includes('broken')) return 'debug';
   if (msg.includes('add') || msg.includes('create') || msg.includes('write') || msg.includes('implement') || msg.includes('change') || msg.includes('update') || msg.includes('refactor')) return 'code';
   return 'generic';
 }
 
-// ─── MOCK AI RESPONSES ──────────────────────────────────────────────
-const MOCK_RESPONSES = [
-  {
-    triggers: ['hello', 'hi', 'hey'],
-    response: `Hello! 👋 I'm your AI coding assistant. I can help you with:
+// ─── SMART FILE SELECTION ──────────────────────────────────────────
 
-- **Code Generation**: Create new components, functions, or entire files
-- **Smart Editing**: Modify only specific lines in large files using patches
-- **Debugging**: Find and fix bugs with root cause analysis
-- **Code Review**: Identify security issues, performance problems, and improvements
-- **Wireframes**: Design UI layouts with ASCII mockups
-- **File Analysis**: Read and understand your project structure
-
-What would you like to work on?`,
-  },
-  {
-    triggers: ['create', 'make', 'build', 'add'],
-    response: `I'd be happy to help you create that! However, I need a bit more context to generate the best code.
-
-Could you tell me:
-1. What file path should I create? (e.g., \`src/components/Button.tsx\`)
-2. What should this component/function do?
-3. Any specific styling requirements (Tailwind classes, CSS modules)?
-
-Once you provide these details, I'll generate complete, production-ready code for you.`,
-  },
-  {
-    triggers: ['fix', 'bug', 'error', 'broken'],
-    response: `I'll help you fix that! To provide the most accurate fix, could you share:
-
-1. The error message you're seeing
-2. The file path where the error occurs
-3. Any recent changes you made
-
-If you've already shared the error info above, I'm analyzing it now and will provide a targeted patch that modifies only the necessary lines.`,
-  },
-];
-
-function generateMockResponse(message, projectFiles) {
-  const msgLower = message.toLowerCase();
-  
-  for (const mock of MOCK_RESPONSES) {
-    if (mock.triggers.some(t => msgLower.includes(t))) {
-      return {
-        content: mock.response,
-        model: 'mock-ai',
-        provider: 'mock',
-      };
-    }
-  }
-
-  const fileCount = Object.keys(projectFiles).length;
-  const fileList = Object.keys(projectFiles).slice(0, 5).join(', ');
-  
-  return {
-    content: `I see you're working on a project with ${fileCount} files${fileList ? ` including ${fileList}` : ''}.
-
-I can help you with:
-- **Smart Patches**: Edit only specific lines in large files
-- **Full File Generation**: Create complete new files
-- **Code Analysis**: Read and understand your file structure
-- **Wireframes**: Design UI layouts
-
-What specific change would you like me to make? Try asking something like:
-- "Fix the bug in src/components/App.tsx"
-- "Add a new Login component at src/components/Login.tsx"
-- "Create a wireframe for the dashboard"
-- "Review the code in src/utils/helpers.ts"`,
-    model: 'mock-ai',
-    provider: 'mock',
-  };
-}
-
-// ─── SMART FILE SELECTION ─────────────────────────────────────────
 export function selectRelevantFiles(projectFiles, userMessage, activeFile = null, recentFiles = []) {
   const entries = Object.entries(projectFiles);
   const totalFiles = entries.length;
@@ -483,15 +285,29 @@ function buildCompactTree(filenames, selectedFiles) {
 }
 
 // ─── PROMPT BUILDING ────────────────────────────────────────────────
+
 export function buildPrompt(projectFiles, userMessage, options = {}) {
   const {
     activeFile = null, recentFiles = [], consoleErrors = [], buildErrors = [],
     cursorPosition = null, selectedCode = null, chatHistory = [],
   } = options;
 
-  const fileEntries = Object.entries(projectFiles);
   const mode = detectMode(userMessage, { consoleErrors, buildErrors });
+  
+  // ─── GENERAL MODE: zero project context ──────────────────────────
+  if (mode === 'general') {
+    const messages = [{ role: 'system', content: GENERAL_PERSONALITY }];
+    const trimmedHistory = chatHistory.slice(-6);
+    for (const msg of trimmedHistory) {
+      messages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
+    }
+    messages.push({ role: 'user', content: userMessage });
+    return { messages, mode };
+  }
+
+  // ─── CODE MODE: full context ──────────────────────────────────────
   const systemPrompt = MODE_PROMPTS[mode] || MODE_PROMPTS.generic;
+  const fileEntries = Object.entries(projectFiles);
 
   if (fileEntries.length === 0) {
     return { messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }], mode };
@@ -541,6 +357,7 @@ export function buildPrompt(projectFiles, userMessage, options = {}) {
 }
 
 // ─── OPENROUTER ─────────────────────────────────────────────────────
+
 export async function fetchOpenRouterFreeModels() {
   try {
     const now = Date.now();
@@ -584,29 +401,51 @@ export async function fetchOpenRouterFreeModels() {
 
 export async function getAvailableModels() {
   const freeModels = await fetchOpenRouterFreeModels();
+  const hasValidOpenRouter = OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'sk' && OPENROUTER_API_KEY.length > 10;
+  const hasValidGroq = GROQ_API_KEY && GROQ_API_KEY !== 'gsk_Qr3N' && GROQ_API_KEY.length > 10;
+  const hasValidGemini = GEMINI_API_KEY && GEMINI_API_KEY !== 'AQ.Ab' && GEMINI_API_KEY.length > 10;
+
   return {
     openrouter: {
-      status: !!OPENROUTER_API_KEY ? 'ok' : 'not_configured',
+      status: hasValidOpenRouter ? 'ok' : 'not_configured',
       models: freeModels,
     },
     groq: {
-      status: !!GROQ_API_KEY ? 'ok' : 'not_configured',
+      status: hasValidGroq ? 'ok' : 'not_configured',
       models: ['meta-llama/llama-4-scout-17b-16e-instruct'],
     },
     gemini: {
-      status: !!GEMINI_API_KEY && geminiClient ? 'ok' : 'not_configured',
+      status: hasValidGemini && geminiClient ? 'ok' : 'not_configured',
       models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-    },
-    mock: {
-      status: MOCK_AI ? 'ok' : 'not_configured',
-      models: ['mock-ai'],
     },
   };
 }
 
 // ─── OPENROUTER API CALLS ──────────────────────────────────────────
+
 async function callOpenRouter(messages, preferredModel = null) {
-  if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === 'sk' || OPENROUTER_API_KEY.length < 10) {
+    if (MOCK_MODE) {
+      console.log('[AI Service] 🎭 Mock mode enabled (invalid API key)');
+      const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+      return {
+        content: generateMockResponse(userMessage),
+        model: 'mock',
+        provider: 'mock'
+      };
+    }
+    throw new Error('OPENROUTER_API_KEY not configured properly. Please set a valid API key.');
+  }
+
+  if (MOCK_MODE) {
+    console.log('[AI Service] 🎭 Mock mode enabled');
+    const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+    return {
+      content: generateMockResponse(userMessage),
+      model: 'mock',
+      provider: 'mock'
+    };
+  }
 
   const freeModels = await fetchOpenRouterFreeModels();
   const modelsToTry = preferredModel 
@@ -628,7 +467,7 @@ async function callOpenRouter(messages, preferredModel = null) {
           model,
           messages,
           temperature: 0.3,
-          max_tokens: 16384,
+          max_tokens: 8192,
           route: 'fallback',
         }),
       });
@@ -663,8 +502,48 @@ async function callOpenRouter(messages, preferredModel = null) {
 }
 
 // ─── OPENROUTER STREAMING ──────────────────────────────────────────
+
 async function streamOpenRouter(messages, onChunk, preferredModel = null) {
-  if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === 'sk' || OPENROUTER_API_KEY.length < 10) {
+    if (MOCK_MODE) {
+      console.log('[AI Service] 🎭 Mock streaming mode enabled (invalid API key)');
+      const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+      const mockResponse = generateMockResponse(userMessage);
+      
+      const chunks = mockResponse.split(' ');
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
+        onChunk(chunk);
+        await new Promise(r => setTimeout(r, 20));
+      }
+      
+      return {
+        content: mockResponse,
+        model: 'mock',
+        provider: 'mock'
+      };
+    }
+    throw new Error('OPENROUTER_API_KEY not configured properly. Please set a valid API key.');
+  }
+
+  if (MOCK_MODE) {
+    console.log('[AI Service] 🎭 Mock streaming mode enabled');
+    const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+    const mockResponse = generateMockResponse(userMessage);
+    
+    const chunks = mockResponse.split(' ');
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
+      onChunk(chunk);
+      await new Promise(r => setTimeout(r, 20));
+    }
+    
+    return {
+      content: mockResponse,
+      model: 'mock',
+      provider: 'mock'
+    };
+  }
 
   const freeModels = await fetchOpenRouterFreeModels();
   const modelsToTry = preferredModel
@@ -691,7 +570,7 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
           model,
           messages,
           temperature: 0.3,
-          max_tokens: 16384,
+          max_tokens: 8192,
           stream: true,
           route: 'fallback',
         }),
@@ -770,8 +649,20 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
 }
 
 // ─── GROQ ─────────────────────────────────────────────────────────
+
 async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-instruct') {
-  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not set');
+  if (!GROQ_API_KEY || GROQ_API_KEY === 'gsk_Qr3N' || GROQ_API_KEY.length < 10) {
+    if (MOCK_MODE) {
+      console.log('[AI Service] 🎭 Mock mode enabled (invalid GROQ key)');
+      const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+      return {
+        content: generateMockResponse(userMessage),
+        model: 'mock',
+        provider: 'mock'
+      };
+    }
+    throw new Error('GROQ_API_KEY not configured properly. Please set a valid API key.');
+  }
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -779,7 +670,7 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
       'Authorization': `Bearer ${GROQ_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ model, messages, temperature: 0.3, max_tokens: 16384 }),
+    body: JSON.stringify({ model, messages, temperature: 0.3, max_tokens: 8192 }),
   });
 
   if (!response.ok) {
@@ -794,7 +685,27 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
 }
 
 async function streamGroq(messages, onChunk) {
-  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not set');
+  if (!GROQ_API_KEY || GROQ_API_KEY === 'gsk_Qr3N' || GROQ_API_KEY.length < 10) {
+    if (MOCK_MODE) {
+      console.log('[AI Service] 🎭 Mock streaming mode enabled (invalid GROQ key)');
+      const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+      const mockResponse = generateMockResponse(userMessage);
+      
+      const chunks = mockResponse.split(' ');
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
+        onChunk(chunk);
+        await new Promise(r => setTimeout(r, 20));
+      }
+      
+      return {
+        content: mockResponse,
+        model: 'mock',
+        provider: 'mock'
+      };
+    }
+    throw new Error('GROQ_API_KEY not configured properly. Please set a valid API key.');
+  }
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -806,7 +717,7 @@ async function streamGroq(messages, onChunk) {
       model: 'meta-llama/llama-4-scout-17b-16e-instruct',
       messages,
       temperature: 0.3,
-      max_tokens: 16384,
+      max_tokens: 8192,
       stream: true,
     }),
   });
@@ -842,25 +753,47 @@ async function streamGroq(messages, onChunk) {
 }
 
 // ─── GEMINI (Conditional) ─────────────────────────────────────────
-const GEMINI_SYSTEM = `You are an Expert Senior Full-Stack Developer working inside BadLson AI Code Editor.
 
-TECH STACK: JavaScript ES6+, TypeScript, React, HTML5, CSS/Tailwind, Node.js, Express.
+const GEMINI_SYSTEM = `You are a code editor AI. You MUST follow these rules EXACTLY:
 
-⚡ CORE RULES:
-1. Use \`\`\`edit:FULL_FILE_PATH blocks for ALL code changes
-2. Use \`\`\`patch:FULL_FILE_PATH for modifying only specific lines in large files
-3. Use \`\`\`wireframe:Title for UI mockups
-4. NEVER use placeholders like "// rest of code"
-5. ALWAYS provide FULL file content for edit blocks
-6. For patches, use unified diff format with @@ line numbers
+RULE 1: When changing code, use ONLY this format:
+\`\`\`edit:FULL_FILE_PATH
+// complete file content here
+\`\`\`
 
-When providing code:
-1. Explain your approach briefly
-2. Show the complete file or precise patch
-3. Say **File Completed:** filename when done`;
+RULE 2: NEVER use any other format. No comments, no explanations inside code blocks.
+
+RULE 3: If you are not changing code, just chat normally.
+
+RULE 4: Example of CORRECT output:
+I will update the styles.
+\`\`\`edit:styles.css
+body { margin: 0; padding: 0; }
+\`\`\`
+
+RULE 5: Example of WRONG output (NEVER do this):
+Here is the CSS:
+\`\`\`css
+body { margin: 0; }
+\`\`\`
+
+RULE 6: The edit block must contain the COMPLETE file content, not just changes.
+
+RULE 7: After giving code, say: **File Completed:** filename`;
 
 async function callGemini(messages, model = 'gemini-2.5-flash') {
-  if (!geminiClient) throw new Error('GEMINI_API_KEY not set or @google/genai not installed');
+  if (!geminiClient) {
+    if (MOCK_MODE) {
+      console.log('[AI Service] 🎭 Mock mode enabled (Gemini not available)');
+      const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+      return {
+        content: generateMockResponse(userMessage),
+        model: 'mock',
+        provider: 'mock'
+      };
+    }
+    throw new Error('GEMINI_API_KEY not configured or @google/genai not installed');
+  }
 
   const userMessages = messages.filter(m => m.role !== 'system');
   const fullPrompt = GEMINI_SYSTEM + '\n\n=== PROJECT CONTEXT ===\n' + 
@@ -869,7 +802,7 @@ async function callGemini(messages, model = 'gemini-2.5-flash') {
   const result = await geminiClient.models.generateContent({
     model,
     contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-    config: { maxOutputTokens: 16384, temperature: 0.1, topP: 0.1 },
+    config: { maxOutputTokens: 8192, temperature: 0.1, topP: 0.1 },
   });
 
   let text = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -881,7 +814,27 @@ async function callGemini(messages, model = 'gemini-2.5-flash') {
 }
 
 async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
-  if (!geminiClient) throw new Error('GEMINI_API_KEY not set or @google/genai not installed');
+  if (!geminiClient) {
+    if (MOCK_MODE) {
+      console.log('[AI Service] 🎭 Mock streaming mode enabled (Gemini not available)');
+      const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+      const mockResponse = generateMockResponse(userMessage);
+      
+      const chunks = mockResponse.split(' ');
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
+        onChunk(chunk);
+        await new Promise(r => setTimeout(r, 20));
+      }
+      
+      return {
+        content: mockResponse,
+        model: 'mock',
+        provider: 'mock'
+      };
+    }
+    throw new Error('GEMINI_API_KEY not configured or @google/genai not installed');
+  }
 
   const userMessages = messages.filter(m => m.role !== 'system');
   const fullPrompt = GEMINI_SYSTEM + '\n\n=== PROJECT CONTEXT ===\n' + 
@@ -890,7 +843,7 @@ async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
   const result = await geminiClient.models.generateContentStream({
     model,
     contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-    config: { maxOutputTokens: 16384, temperature: 0.1, topP: 0.1 },
+    config: { maxOutputTokens: 8192, temperature: 0.1, topP: 0.1 },
   });
 
   let fullText = '';
@@ -909,45 +862,43 @@ async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
   return { content: cleanResponse(fullText), model, provider: 'gemini' };
 }
 
-// ─── MOCK AI ────────────────────────────────────────────────────────
-async function callMockAI(messages, projectFiles = {}) {
-  const userMessage = messages.filter(m => m.role === 'user').pop()?.content || '';
-  return generateMockResponse(userMessage, projectFiles);
-}
-
-async function streamMockAI(messages, onChunk, projectFiles = {}) {
-  const userMessage = messages.filter(m => m.role === 'user').pop()?.content || '';
-  const response = generateMockResponse(userMessage, projectFiles);
-  
-  // Simulate streaming by chunking the response
-  const chunks = response.content.split(/(?=[.!?]\s+)/);
-  for (const chunk of chunks) {
-    if (onChunk) onChunk(chunk);
-    await new Promise(r => setTimeout(r, 50));
-  }
-  
-  return response;
-}
-
 // ─── STREAM WITH FALLBACK ──────────────────────────────────────────
-export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null, projectFiles = {}) {
-  // Check mock mode first
-  if (MOCK_AI) {
-    console.log('[AI Service] MOCK_AI enabled — using mock responses');
-    return await streamMockAI(messages, onChunk, projectFiles);
-  }
 
+export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null) {
   const providers = [];
-  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
-  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
-  if (preferredProvider === 'gemini' && GEMINI_API_KEY && geminiClient) providers.push('gemini');
+  
+  const hasValidOpenRouter = OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'sk' && OPENROUTER_API_KEY.length > 10;
+  const hasValidGroq = GROQ_API_KEY && GROQ_API_KEY !== 'gsk_Qr3N' && GROQ_API_KEY.length > 10;
+  const hasValidGemini = GEMINI_API_KEY && GEMINI_API_KEY !== 'AQ.Ab' && GEMINI_API_KEY.length > 10 && geminiClient;
 
-  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
-  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
-  if (GEMINI_API_KEY && geminiClient && !providers.includes('gemini')) providers.push('gemini');
+  if (preferredProvider === 'openrouter' && hasValidOpenRouter) providers.push('openrouter');
+  if (preferredProvider === 'groq' && hasValidGroq) providers.push('groq');
+  if (preferredProvider === 'gemini' && hasValidGemini) providers.push('gemini');
+
+  if (hasValidOpenRouter && !providers.includes('openrouter')) providers.push('openrouter');
+  if (hasValidGroq && !providers.includes('groq')) providers.push('groq');
+  if (hasValidGemini && !providers.includes('gemini')) providers.push('gemini');
 
   if (providers.length === 0) {
-    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY. Or enable MOCK_AI=true in .env');
+    if (MOCK_MODE) {
+      console.log('[AI Service] 🎭 Mock mode enabled (no valid providers)');
+      const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+      const mockResponse = generateMockResponse(userMessage);
+      
+      const chunks = mockResponse.split(' ');
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
+        onChunk(chunk);
+        await new Promise(r => setTimeout(r, 20));
+      }
+      
+      return {
+        content: mockResponse,
+        model: 'mock',
+        provider: 'mock'
+      };
+    }
+    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY in backend/.env');
   }
 
   console.log(`[AI Service] streamWithFallback | providers=[${providers.join(', ')}] | preferredModel=${preferredModel || 'auto'}`);
@@ -973,24 +924,33 @@ export async function streamWithFallback(messages, onChunk, preferredProvider = 
 }
 
 // ─── CALL WITH FALLBACK ────────────────────────────────────────────
-export async function callWithFallback(messages, preferredProvider = 'openrouter', preferredModel = null, projectFiles = {}) {
-  // Check mock mode first
-  if (MOCK_AI) {
-    console.log('[AI Service] MOCK_AI enabled — using mock responses');
-    return await callMockAI(messages, projectFiles);
-  }
 
+export async function callWithFallback(messages, preferredProvider = 'openrouter', preferredModel = null) {
   const providers = [];
-  if (preferredProvider === 'openrouter' && OPENROUTER_API_KEY) providers.push('openrouter');
-  if (preferredProvider === 'groq' && GROQ_API_KEY) providers.push('groq');
-  if (preferredProvider === 'gemini' && GEMINI_API_KEY && geminiClient) providers.push('gemini');
+  
+  const hasValidOpenRouter = OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'sk' && OPENROUTER_API_KEY.length > 10;
+  const hasValidGroq = GROQ_API_KEY && GROQ_API_KEY !== 'gsk_Qr3N' && GROQ_API_KEY.length > 10;
+  const hasValidGemini = GEMINI_API_KEY && GEMINI_API_KEY !== 'AQ.Ab' && GEMINI_API_KEY.length > 10 && geminiClient;
 
-  if (OPENROUTER_API_KEY && !providers.includes('openrouter')) providers.push('openrouter');
-  if (GROQ_API_KEY && !providers.includes('groq')) providers.push('groq');
-  if (GEMINI_API_KEY && geminiClient && !providers.includes('gemini')) providers.push('gemini');
+  if (preferredProvider === 'openrouter' && hasValidOpenRouter) providers.push('openrouter');
+  if (preferredProvider === 'groq' && hasValidGroq) providers.push('groq');
+  if (preferredProvider === 'gemini' && hasValidGemini) providers.push('gemini');
+
+  if (hasValidOpenRouter && !providers.includes('openrouter')) providers.push('openrouter');
+  if (hasValidGroq && !providers.includes('groq')) providers.push('groq');
+  if (hasValidGemini && !providers.includes('gemini')) providers.push('gemini');
 
   if (providers.length === 0) {
-    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY. Or enable MOCK_AI=true in .env');
+    if (MOCK_MODE) {
+      console.log('[AI Service] 🎭 Mock mode enabled (no valid providers)');
+      const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
+      return {
+        content: generateMockResponse(userMessage),
+        model: 'mock',
+        provider: 'mock'
+      };
+    }
+    throw new Error('No AI provider API keys configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY in backend/.env');
   }
 
   let lastError;
@@ -1008,7 +968,35 @@ export async function callWithFallback(messages, preferredProvider = 'openrouter
   throw lastError || new Error('All AI providers failed');
 }
 
+// ─── MOCK RESPONSES ─────────────────────────────────────────────────
+
+function generateMockResponse(userMessage) {
+  const lower = userMessage.toLowerCase();
+  
+  if (lower.includes('hello') || lower.includes('hi') || lower === 'hey') {
+    return "Hey there! 👋 What would you like to work on today? I'm here to help with your code!";
+  }
+  if (lower.includes('2 + 2') || lower.includes('2 plus 2') || lower.includes('what is 2+2')) {
+    return "2 + 2 = 4 🧮";
+  }
+  if (lower.includes('thank you') || lower.includes('thanks')) {
+    return "You're welcome! 😊 Let me know if you need anything else!";
+  }
+  if (lower.includes('how are you')) {
+    return "I'm doing great, thanks for asking! 😄 How can I help you with your code today?";
+  }
+  if (lower.includes('what can you do')) {
+    return "I can help you write code, debug issues, review your code, explain concepts, and even create wireframes! 🚀";
+  }
+  if (lower.includes('who are you')) {
+    return "I'm your AI coding assistant, built to help you with your software development projects! 💻";
+  }
+  
+  return `I received your message: "${userMessage}". I'm here to help with any coding questions you have! What would you like to work on?`;
+}
+
 // ─── RESPONSE CLEANING & PARSING ────────────────────────────────────
+
 function cleanResponse(text) {
   if (!text) return '';
   return text
@@ -1023,35 +1011,27 @@ function cleanResponse(text) {
 }
 
 export function parseAiResponse(response) {
-  if (!response) return { message: '', edits: [], patches: [], wireframes: [], mode: 'generic' };
+  if (!response) return { message: '', edits: [], mode: 'generic' };
 
   const cleaned = typeof response === 'string' ? cleanResponse(response) : cleanResponse(response.content || '');
 
-  // Parse edit blocks (full file replacement)
-  const editPattern = /```edit:([^\n]+)\n([\s\S]*?)```/g;
+  const editPatterns = [
+    /```edit:([^\n]+)\n([\s\S]*?)```/g,
+    /```\s*edit:([^\n]+)\n([\s\S]*?)```/g,
+    /```file:([^\n]+)\n([\s\S]*?)```/g,
+    /```\s*([^\n]+\.(?:html|css|js|ts|tsx|jsx))\n([\s\S]*?)```/g,
+  ];
+
   const edits = [];
-  let match;
-  while ((match = editPattern.exec(cleaned)) !== null) {
-    const existing = edits.find(e => e.filename === match[1].trim() && e.code === match[2].trim());
-    if (!existing) edits.push({ filename: match[1].trim(), code: match[2].trim() });
+  for (const pattern of editPatterns) {
+    let match;
+    while ((match = pattern.exec(cleaned)) !== null) {
+      const existing = edits.find(e => e.filename === match[1].trim() && e.code === match[2].trim());
+      if (!existing) edits.push({ filename: match[1].trim(), code: match[2].trim() });
+    }
   }
 
-  // Parse patch blocks (line-level changes)
-  const patchPattern = /```patch:([^\n]+)\n([\s\S]*?)```/g;
-  const patches = [];
-  while ((match = patchPattern.exec(cleaned)) !== null) {
-    patches.push({ filename: match[1].trim(), diff: match[2].trim() });
-  }
-
-  // Parse wireframe blocks
-  const wireframePattern = /```wireframe:([^\n]+)\n([\s\S]*?)```/g;
-  const wireframes = [];
-  while ((match = wireframePattern.exec(cleaned)) !== null) {
-    wireframes.push({ title: match[1].trim(), content: match[2].trim() });
-  }
-
-  // Fallback: detect code blocks without edit: prefix
-  if (edits.length === 0 && patches.length === 0) {
+  if (edits.length === 0) {
     const codeBlockRegex = /```(?:html|css|js|ts|tsx|jsx|javascript|typescript)\n([\s\S]*?)```/g;
     let match;
     while ((match = codeBlockRegex.exec(cleaned)) !== null) {
@@ -1063,29 +1043,17 @@ export function parseAiResponse(response) {
   const fileCompletedRegex = /\*\*File Completed:\s*([^\n]+)\*\*/i;
   const completedMatch = cleaned.match(fileCompletedRegex);
 
-  // Build clean message (remove all code blocks)
   let message = cleaned;
-  message = message.replace(editPattern, '');
-  message = message.replace(patchPattern, '');
-  message = message.replace(wireframePattern, '');
-  message = message.replace(/\*\*File Completed:[^\n]*\*\*/gi, '');
-  message = message.replace(/\n{3,}/g, '\n\n').trim();
+  for (const pattern of editPatterns) message = message.replace(pattern, '');
+  message = message.replace(/\*\*File Completed:[^\n]*\*\*/gi, '').replace(/\n{3,}/g, '\n\n').trim();
 
   let detectedMode = 'generic';
-  if (wireframes.length > 0) detectedMode = 'wireframe';
-  else if (message.includes('BUG:') || message.includes('FIX:')) detectedMode = 'debug';
+  if (message.includes('BUG:') || message.includes('FIX:')) detectedMode = 'debug';
   else if (message.includes('REVIEW:') || message.includes('ISSUE:')) detectedMode = 'review';
   else if (message.includes('EXPLANATION:')) detectedMode = 'explain';
-  else if (edits.length > 0 || patches.length > 0) detectedMode = 'code';
+  else if (edits.length > 0) detectedMode = 'code';
 
-  return { 
-    message, 
-    edits, 
-    patches, 
-    wireframes,
-    mode: detectedMode, 
-    completedFile: completedMatch?.[1]?.trim() 
-  };
+  return { message, edits, mode: detectedMode, completedFile: completedMatch?.[1]?.trim() };
 }
 
 function guessFilenameFromContext(text, code) {
@@ -1098,75 +1066,14 @@ function guessFilenameFromContext(text, code) {
   return null;
 }
 
-// ─── UNIFIED DIFF PATCH APPLICATION ─────────────────────────────────
-function applyPatch(originalContent, diffText) {
-  const lines = originalContent.split('\n');
-  const diffLines = diffText.split('\n');
-  
-  // Simple unified diff parser
-  let result = [];
-  let i = 0;
-  let inHunk = false;
-  let oldStart = 0;
-  let oldCount = 0;
-  let newStart = 0;
-  let newCount = 0;
-  let lineIdx = 0;
-  
-  for (const line of diffLines) {
-    if (line.startsWith('@@')) {
-      // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
-      const match = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-      if (match) {
-        oldStart = parseInt(match[1]) - 1; // Convert to 0-based
-        oldCount = parseInt(match[2] || '1');
-        newStart = parseInt(match[3]) - 1;
-        newCount = parseInt(match[4] || '1');
-        lineIdx = oldStart;
-        inHunk = true;
-        
-        // Add lines before hunk
-        while (result.length < oldStart) {
-          result.push(lines[result.length]);
-        }
-      }
-      continue;
-    }
-    
-    if (!inHunk) continue;
-    
-    if (line.startsWith(' ')) {
-      // Context line
-      result.push(line.substring(1));
-      lineIdx++;
-    } else if (line.startsWith('-')) {
-      // Removed line - skip it
-      lineIdx++;
-    } else if (line.startsWith('+')) {
-      // Added line
-      result.push(line.substring(1));
-    } else if (line === '\\ No newline at end of file') {
-      // Ignore
-    }
-  }
-  
-  // Add remaining lines after last hunk
-  while (lineIdx < lines.length) {
-    result.push(lines[lineIdx]);
-    lineIdx++;
-  }
-  
-  return result.join('\n');
-}
-
 // ─── SMART EDIT APPLICATION ────────────────────────────────────────
-export function applyEdits(projectFiles, edits, patches, options = {}) {
+
+export function applyEdits(projectFiles, edits, options = {}) {
   const { activeFile = null, strategy = 'smart' } = options;
   const updatedFiles = { ...projectFiles };
   const applied = [];
   const failed = [];
 
-  // Apply full file edits
   for (const edit of edits) {
     const { filename, code } = edit;
     if (!code || code.length < 5) {
@@ -1194,31 +1101,6 @@ export function applyEdits(projectFiles, edits, patches, options = {}) {
     } else {
       failed.push({ filename, reason: result.reason });
       console.warn(`[AI] Edit failed for ${filename}: ${result.reason}`);
-    }
-  }
-
-  // Apply patches (line-level changes)
-  for (const patch of patches) {
-    const { filename, diff } = patch;
-    
-    if (!updatedFiles.hasOwnProperty(filename)) {
-      failed.push({ filename, reason: 'File does not exist for patch' });
-      continue;
-    }
-
-    try {
-      const original = updatedFiles[filename];
-      const patched = applyPatch(original, diff);
-      
-      if (patched !== original) {
-        updatedFiles[filename] = patched;
-        applied.push({ filename, type: 'patched' });
-      } else {
-        failed.push({ filename, reason: 'Patch did not change file content' });
-      }
-    } catch (error) {
-      failed.push({ filename, reason: `Patch application failed: ${error.message}` });
-      console.warn(`[AI] Patch failed for ${filename}:`, error.message);
     }
   }
 
@@ -1271,20 +1153,190 @@ function findCommonEnd(a, b, startOffset) {
   return i;
 }
 
+// ─── SMART LINE-SPECIFIC EDITS ──────────────────────────────────────
+
+export function applySmartEdits(projectFiles, edits) {
+  const updatedFiles = { ...projectFiles };
+  const applied = [];
+  const failed = [];
+
+  for (const edit of edits) {
+    const { filename, code } = edit;
+    if (!code || code.length < 5) {
+      failed.push({ filename, reason: 'Empty or too short edit block' });
+      continue;
+    }
+
+    if (!updatedFiles.hasOwnProperty(filename)) {
+      updatedFiles[filename] = code;
+      applied.push({ filename, type: 'created' });
+      continue;
+    }
+
+    const original = updatedFiles[filename];
+    const lineChanges = extractLineChanges(code);
+    
+    if (lineChanges.length > 0) {
+      const result = applyLineSpecificEdits(original, lineChanges);
+      if (result.success) {
+        updatedFiles[filename] = result.content;
+        applied.push({ filename, type: 'line-edits', changes: lineChanges.length });
+      } else {
+        updatedFiles[filename] = code;
+        applied.push({ filename, type: 'replaced-full' });
+      }
+    } else {
+      const similarity = calculateSimilarity(original, code);
+      if (similarity > 0.7) {
+        const result = smartMerge(original, code);
+        if (result.success) {
+          updatedFiles[filename] = result.content;
+          applied.push({ filename, type: 'smart-merge' });
+        } else {
+          updatedFiles[filename] = code;
+          applied.push({ filename, type: 'replaced-full' });
+        }
+      } else {
+        updatedFiles[filename] = code;
+        applied.push({ filename, type: 'replaced-full' });
+      }
+    }
+  }
+
+  return { updatedFiles, applied, failed };
+}
+
+function extractLineChanges(code) {
+  const changes = [];
+  const lines = code.split('\n');
+  let currentChange = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    
+    const changedMatch = trimmed.match(/\/\/\s*✅?\s*CHANGED:?\s*(?:line\s*)?(\d+)(?:-(\d+))?/i);
+    const addedMatch = trimmed.match(/\/\/\s*✅?\s*ADDED:?\s*(?:line\s*)?(\d+)(?:-(\d+))?/i);
+    const removedMatch = trimmed.match(/\/\/\s*✅?\s*REMOVED:?\s*(?:line\s*)?(\d+)(?:-(\d+))?/i);
+    
+    if (changedMatch || addedMatch || removedMatch) {
+      if (currentChange) {
+        changes.push(currentChange);
+      }
+      const match = changedMatch || addedMatch || removedMatch;
+      const type = changedMatch ? 'changed' : addedMatch ? 'added' : 'removed';
+      const startLine = parseInt(match[1]);
+      const endLine = match[2] ? parseInt(match[2]) : startLine;
+      
+      currentChange = {
+        type,
+        startLine,
+        endLine,
+        content: [],
+        originalLines: []
+      };
+      continue;
+    }
+    
+    if (currentChange) {
+      currentChange.content.push(line);
+    }
+  }
+  
+  if (currentChange) {
+    changes.push(currentChange);
+  }
+  
+  return changes;
+}
+
+function applyLineSpecificEdits(original, changes) {
+  const originalLines = original.split('\n');
+  let resultLines = [...originalLines];
+  let success = true;
+
+  const sortedChanges = changes.sort((a, b) => b.startLine - a.startLine);
+
+  for (const change of sortedChanges) {
+    try {
+      const startIdx = Math.max(0, change.startLine - 1);
+      const endIdx = Math.min(originalLines.length, change.endLine);
+      
+      if (change.type === 'removed') {
+        resultLines.splice(startIdx, endIdx - startIdx + 1);
+      } else if (change.type === 'changed') {
+        const newContent = change.content.join('\n');
+        resultLines.splice(startIdx, endIdx - startIdx + 1, newContent);
+      } else if (change.type === 'added') {
+        const newContent = change.content.join('\n');
+        resultLines.splice(startIdx + 1, 0, newContent);
+      }
+    } catch (error) {
+      success = false;
+      console.warn(`[AI] Line edit failed for lines ${change.startLine}-${change.endLine}:`, error.message);
+    }
+  }
+
+  return {
+    success,
+    content: resultLines.join('\n')
+  };
+}
+
+function calculateSimilarity(str1, str2) {
+  const maxLen = Math.max(str1.length, str2.length);
+  if (maxLen === 0) return 1;
+  
+  let matches = 0;
+  const minLen = Math.min(str1.length, str2.length);
+  for (let i = 0; i < minLen; i++) {
+    if (str1[i] === str2[i]) matches++;
+  }
+  return matches / maxLen;
+}
+
+function smartMerge(original, newVersion) {
+  const originalLines = original.split('\n');
+  const newLines = newVersion.split('\n');
+  
+  let commonStart = 0;
+  while (commonStart < Math.min(originalLines.length, newLines.length) && 
+         originalLines[commonStart] === newLines[commonStart]) {
+    commonStart++;
+  }
+  
+  let commonEnd = 0;
+  while (commonEnd < Math.min(originalLines.length - commonStart, newLines.length - commonStart) &&
+         originalLines[originalLines.length - 1 - commonEnd] === newLines[newLines.length - 1 - commonEnd]) {
+    commonEnd++;
+  }
+  
+  if (commonStart > 0 || commonEnd > 0) {
+    const merged = [
+      ...originalLines.slice(0, commonStart),
+      ...newLines.slice(commonStart, newLines.length - commonEnd),
+      ...originalLines.slice(originalLines.length - commonEnd)
+    ];
+    return { success: true, content: merged.join('\n') };
+  }
+  
+  return { success: false };
+}
+
 // ─── TEST CONNECTION ────────────────────────────────────────────────
+
 export async function testConnection() {
   const results = {
     openrouter: { status: 'not_configured' },
     groq: { status: 'not_configured' },
     gemini: { status: 'not_configured' },
-    mock: { status: MOCK_AI ? 'ok' : 'not_configured' },
   };
 
-  if (MOCK_AI) {
-    return results;
-  }
+  const hasValidOpenRouter = OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'sk' && OPENROUTER_API_KEY.length > 10;
+  const hasValidGroq = GROQ_API_KEY && GROQ_API_KEY !== 'gsk_Qr3N' && GROQ_API_KEY.length > 10;
+  const hasValidGemini = GEMINI_API_KEY && GEMINI_API_KEY !== 'AQ.Ab' && GEMINI_API_KEY.length > 10 && geminiClient;
 
-  if (OPENROUTER_API_KEY) {
+  if (hasValidOpenRouter) {
     try {
       const response = await fetch('https://openrouter.ai/api/v1/auth/key', {
         headers: { 'Authorization': `Bearer ${OPENROUTER_API_KEY}` },
@@ -1298,7 +1350,7 @@ export async function testConnection() {
     }
   }
 
-  if (GROQ_API_KEY) {
+  if (hasValidGroq) {
     try {
       const response = await fetch('https://api.groq.com/openai/v1/models', {
         headers: { 'Authorization': `Bearer ${GROQ_API_KEY}` },
@@ -1312,7 +1364,7 @@ export async function testConnection() {
     }
   }
 
-  if (GEMINI_API_KEY && geminiClient) {
+  if (hasValidGemini) {
     try {
       const result = await geminiClient.models.generateContent({
         model: 'gemini-2.5-flash',
@@ -1325,6 +1377,10 @@ export async function testConnection() {
     } catch (err) {
       results.gemini = { status: 'error', message: err.message };
     }
+  }
+
+  if (!hasValidOpenRouter && !hasValidGroq && !hasValidGemini && MOCK_MODE) {
+    results.openrouter = { status: 'ok', message: 'Mock mode enabled' };
   }
 
   return results;
