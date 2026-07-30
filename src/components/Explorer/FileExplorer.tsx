@@ -686,6 +686,9 @@ export default function FileExplorer() {
     });
   }, []);
 
+  // ─── API BASE URL ──────────────────────────────────────────────────
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
+
   // ─── UPDATED: SMART FOLDER UPLOAD (with concurrency & retry) ─────
   const handleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
@@ -693,7 +696,6 @@ export default function FileExplorer() {
 
     const fileArray = Array.from(fileList);
     const totalFiles = fileArray.length;
-    console.log(`[Upload] Selected ${totalFiles} files`);
 
     const DIRECT_LIMIT = 500;
     const BATCH_SIZE = 500;
@@ -776,7 +778,6 @@ export default function FileExplorer() {
         return;
       }
 
-      const API_BASE = 'http://localhost:5002/api';
       const batches: File[][] = [];
       for (let i = 0; i < totalFiles; i += BATCH_SIZE) {
         batches.push(fileArray.slice(i, i + BATCH_SIZE));
@@ -818,7 +819,6 @@ export default function FileExplorer() {
         } catch (error) {
           if (attempt < MAX_RETRIES) {
             const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
-            console.warn(`[Upload] Batch ${batchIndex + 1} failed, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})...`);
             await new Promise(r => setTimeout(r, delay));
             return uploadBatchWithRetry(batch, batchIndex, attempt + 1);
           }
@@ -886,14 +886,13 @@ export default function FileExplorer() {
 
       showToast(`Uploaded ${uploadedCount} files in ${batches.length} batches`, 'success');
     } catch (error) {
-      console.error('[Upload] Error:', error);
       showToast(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
     } finally {
       setImporting(false);
       setImportProgress({ current: 0, total: 0 });
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [showToast]);
+  }, [showToast, API_BASE]);
 
   const handleZipUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
@@ -911,7 +910,7 @@ export default function FileExplorer() {
     try {
       const formData = new FormData();
       formData.append('zip', file);
-      const response = await fetch('http://localhost:5002/api/upload/zip', {
+      const response = await fetch(`${API_BASE}/upload/zip`, {
         method: 'POST',
         body: formData,
       });
@@ -957,14 +956,13 @@ export default function FileExplorer() {
         throw new Error('Invalid response from server');
       }
     } catch (error) {
-      console.error('[Upload] ZIP error:', error);
       showToast(`ZIP upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
     } finally {
       setImporting(false);
       setImportProgress({ current: 0, total: 0 });
       if (zipInputRef.current) zipInputRef.current.value = '';
     }
-  }, [showToast]);
+  }, [showToast, API_BASE]);
 
   const toggleSettings = useCallback(() => window.dispatchEvent(new CustomEvent('toggle-settings')), []);
   const toggleAccount = useCallback(() => window.dispatchEvent(new CustomEvent('toggle-account')), []);
@@ -1298,5 +1296,3 @@ export default function FileExplorer() {
     </div>
   );
 }
-
-

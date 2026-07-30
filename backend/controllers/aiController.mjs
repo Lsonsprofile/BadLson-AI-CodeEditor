@@ -8,10 +8,6 @@ import {
 } from '../services/aiService.mjs';
 
 // ─── CONTEXT BUILDER ────────────────────────────────────────────────
-/**
- * Builds rich context about the project structure for the AI.
- * Analyzes HTML structure, imports, and file relationships.
- */
 function buildFileContext(projectFiles, activeFile, recentFiles = []) {
   const context = {
     fileCount: Object.keys(projectFiles).length,
@@ -22,26 +18,19 @@ function buildFileContext(projectFiles, activeFile, recentFiles = []) {
     fileTypes: {},
   };
 
-  // Analyze file types
   for (const filename of Object.keys(projectFiles)) {
     const ext = filename.split('.').pop();
     context.fileTypes[ext] = (context.fileTypes[ext] || 0) + 1;
   }
 
-  // Analyze HTML structure if index.html exists
   if (projectFiles['index.html']) {
     context.htmlStructure = analyzeHtmlStructure(projectFiles['index.html']);
   }
 
-  // Build import graph
   context.importGraph = buildImportGraph(projectFiles);
-
   return context;
 }
 
-/**
- * Analyzes HTML structure: tags, hierarchy, IDs, classes
- */
 function analyzeHtmlStructure(htmlContent) {
   const structure = {
     doctype: htmlContent.includes('<!DOCTYPE') || htmlContent.includes('<!doctype'),
@@ -54,11 +43,9 @@ function analyzeHtmlStructure(htmlContent) {
     depth: 0,
   };
 
-  // Extract title
   const titleMatch = htmlContent.match(/<title[^>]*>([^<]*)<\/title>/i);
   if (titleMatch) structure.title = titleMatch[1];
 
-  // Extract meta tags
   const metaMatches = htmlContent.matchAll(/<meta[^>]*>/gi);
   for (const match of metaMatches) {
     const nameMatch = match[0].match(/name=["']([^"']+)["']/i);
@@ -68,25 +55,21 @@ function analyzeHtmlStructure(htmlContent) {
     }
   }
 
-  // Extract scripts
   const scriptMatches = htmlContent.matchAll(/<script[^>]*src=["']([^"']+)["'][^>]*>/gi);
   for (const match of scriptMatches) {
     structure.scripts.push(match[1]);
   }
 
-  // Extract stylesheets
   const linkMatches = htmlContent.matchAll(/<link[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi);
   for (const match of linkMatches) {
     structure.stylesheets.push(match[1]);
   }
 
-  // Extract body classes
   const bodyMatch = htmlContent.match(/<body[^>]*class=["']([^"']+)["'][^>]*>/i);
   if (bodyMatch) {
     structure.bodyClasses = bodyMatch[1].split(/\s+/);
   }
 
-  // Count main structural elements
   const mainTags = ['header', 'nav', 'main', 'section', 'article', 'aside', 'footer', 'div'];
   for (const tag of mainTags) {
     const count = (htmlContent.match(new RegExp(`<${tag}[\\s>]`, 'gi')) || []).length;
@@ -95,9 +78,7 @@ function analyzeHtmlStructure(htmlContent) {
     }
   }
 
-  // Calculate approximate DOM depth
-  let maxDepth = 0;
-  let currentDepth = 0;
+  let maxDepth = 0, currentDepth = 0;
   const tagPattern = /<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g;
   let m;
   while ((m = tagPattern.exec(htmlContent)) !== null) {
@@ -113,9 +94,6 @@ function analyzeHtmlStructure(htmlContent) {
   return structure;
 }
 
-/**
- * Builds import dependency graph
- */
 function buildImportGraph(projectFiles) {
   const graph = {};
   const importRegex = /(?:import|require)\s*\(?['"]([^'"]+)['"]\)?/g;
@@ -131,7 +109,6 @@ function buildImportGraph(projectFiles) {
     }
   }
 
-  // Build reverse mapping
   for (const [filename, data] of Object.entries(graph)) {
     for (const importPath of data.imports) {
       const resolved = resolveImportPath(filename, importPath, Object.keys(projectFiles));
@@ -159,7 +136,101 @@ function resolveImportPath(fromFile, importPath, allFiles) {
   return candidates.find(c => allFiles.includes(c)) || null;
 }
 
+// ─── DEFAULT TEMPLATE GENERATOR ────────────────────────────────────
+
+function generateDefaultTemplate(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  switch (ext) {
+    case 'html':
+      return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Page</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Welcome to My Site</h1>
+  </header>
+  <main>
+    <p>This is a default HTML template.</p>
+    <button id="clickMe">Click Me</button>
+  </main>
+  <footer>
+    <p>&copy; 2025</p>
+  </footer>
+  <script src="script.js"></script>
+</body>
+</html>`;
+    case 'css':
+      return `/* Default CSS */
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  max-width: 800px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.6;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+h1 { color: #2c3e50; }
+button {
+  background: #3498db;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+button:hover { background: #2980b9; }`;
+    case 'js':
+      return `// Default JavaScript
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('clickMe');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      alert('Hello from JavaScript!');
+    });
+  }
+  console.log('Page ready.');
+});`;
+    default:
+      return `// Default content for ${filename}`;
+  }
+}
+
+// ─── FALLBACK EXTRACTION ───────────────────────────────────────────
+
+function extractCodeFromMessage(message) {
+  const blocks = [];
+  const codeBlockRegex = /```(?:html|css|js|javascript|ts|tsx|jsx|json|text)?\n([\s\S]*?)```/g;
+  let match;
+  while ((match = codeBlockRegex.exec(message)) !== null) {
+    const code = match[1].trim();
+    if (!code) continue;
+    const filename = guessFilenameFromContext(message, code);
+    if (filename) {
+      blocks.push({ filename, code });
+    }
+  }
+  return blocks;
+}
+
+function guessFilenameFromContext(text, code) {
+  const fileMatch = text.match(/(?:file|update|change|create|modify)\s+['"]?([^\s'"]+\.(?:html|css|js|ts|tsx|jsx|json))['"]?/i);
+  if (fileMatch) return fileMatch[1];
+  if (code.includes('<!DOCTYPE') || code.includes('<html')) return 'index.html';
+  if (code.includes('@tailwind') || code.includes(':root {') || code.includes('@import')) return 'styles.css';
+  if (code.includes('import React') || code.includes('export default')) return 'App.jsx';
+  if (code.includes('import {') && code.includes('from')) return 'App.jsx';
+  if (code.includes('function') && code.includes('(')) return 'script.js';
+  return null;
+}
+
 // ─── HANDLE CHAT ────────────────────────────────────────────────────
+
 export async function handleChat({
   message,
   projectFiles = {},
@@ -175,13 +246,9 @@ export async function handleChat({
 }) {
   console.log(`[AI Controller] handleChat | message="${message.substring(0, 60)}..." | files=${Object.keys(projectFiles).length} | provider=${provider}`);
 
-  // Build rich file context
   const fileContext = buildFileContext(projectFiles, activeFile, recentFiles);
-
-  // Enhance prompt with file context analysis
   const contextEnhancement = buildContextEnhancement(fileContext, projectFiles);
 
-  // Build the prompt with file context
   const { messages, mode } = buildPrompt(projectFiles, message, {
     activeFile,
     recentFiles,
@@ -192,7 +259,6 @@ export async function handleChat({
     chatHistory,
   });
 
-  // Prepend context enhancement to the last user message
   if (contextEnhancement && messages.length > 0) {
     const lastMsg = messages[messages.length - 1];
     if (lastMsg.role === 'user') {
@@ -200,17 +266,14 @@ export async function handleChat({
     }
   }
 
-  // Get response from AI
   const response = await callWithFallback(messages, provider, preferredModel, projectFiles);
-
-  // Parse the response for edit blocks, patches, and wireframes
   const parsed = parseAiResponse(response.content);
 
-  // Apply edits to files if any
   let updatedFiles = {};
   let appliedEdits = [];
   let failedEdits = [];
 
+  // ─── 1. Try applying edits/patches ──────────────────────────────
   if ((parsed.edits && parsed.edits.length > 0) || (parsed.patches && parsed.patches.length > 0)) {
     const result = applyEdits(projectFiles, parsed.edits || [], parsed.patches || [], { activeFile });
     updatedFiles = result.updatedFiles;
@@ -218,7 +281,51 @@ export async function handleChat({
     failedEdits = result.failed;
   }
 
-  // Build the response
+  // ─── 2. If no edits, try to extract any fenced code block ──────
+  if (Object.keys(updatedFiles).length === 0) {
+    console.log('[AI Controller] No edit blocks found, attempting fallback extraction...');
+    const fallbackEdits = extractCodeFromMessage(response.content);
+    if (fallbackEdits.length > 0) {
+      console.log(`[AI Controller] Fallback extracted ${fallbackEdits.length} code blocks`);
+      const result = applyEdits(projectFiles, fallbackEdits, [], { activeFile });
+      updatedFiles = result.updatedFiles;
+      appliedEdits = result.applied;
+      failedEdits = result.failed;
+      // Update parsed.message to remove the raw code so it's not duplicated
+      parsed.message = response.content.replace(/```[\s\S]*?```/g, '').trim() || parsed.message;
+    }
+  }
+
+  // ─── 3. Final fallback: generate default template ──────────────
+  if (Object.keys(updatedFiles).length === 0) {
+    console.log('[AI Controller] No code blocks found, generating default template...');
+    let filename = 'index.html';
+    const filenameMatch = response.content.match(/(?:created|updated|modified|changed)\s+([^\s]+\.(html|css|js|ts|tsx|jsx|json))/i);
+    if (filenameMatch) {
+      filename = filenameMatch[1];
+    } else if (message.toLowerCase().includes('html')) {
+      filename = 'index.html';
+    } else if (message.toLowerCase().includes('css')) {
+      filename = 'style.css';
+    } else if (message.toLowerCase().includes('javascript') || message.toLowerCase().includes('js')) {
+      filename = 'script.js';
+    }
+    const defaultCode = generateDefaultTemplate(filename);
+    const edit = { filename, code: defaultCode };
+    const result = applyEdits(projectFiles, [edit], [], { activeFile });
+    updatedFiles = result.updatedFiles;
+    appliedEdits = result.applied;
+    failedEdits = result.failed;
+    // Replace the message with the default code block so the user can see it
+    parsed.message = `✅ I've created a default \`${filename}\` template because your request didn't include the code. Here it is:
+
+\`\`\`edit:${filename}
+${defaultCode}
+\`\`\`
+
+You can click **Apply** to add it to your project.`;
+  }
+
   const result = {
     content: parsed.message || response.content,
     provider: response.provider,
@@ -244,6 +351,7 @@ export async function handleChat({
 }
 
 // ─── HANDLE STREAM ──────────────────────────────────────────────────
+
 export async function handleStream({
   message,
   projectFiles = {},
@@ -261,11 +369,9 @@ export async function handleStream({
 }) {
   console.log(`[AI Controller] handleStream | message="${message.substring(0, 60)}..." | files=${Object.keys(projectFiles).length}`);
 
-  // Build rich file context
   const fileContext = buildFileContext(projectFiles, activeFile, recentFiles);
   const contextEnhancement = buildContextEnhancement(fileContext, projectFiles);
 
-  // Build the prompt
   const { messages, mode } = buildPrompt(projectFiles, message, {
     activeFile,
     recentFiles,
@@ -276,7 +382,6 @@ export async function handleStream({
     chatHistory,
   });
 
-  // Prepend context enhancement
   if (contextEnhancement && messages.length > 0) {
     const lastMsg = messages[messages.length - 1];
     if (lastMsg.role === 'user') {
@@ -287,7 +392,6 @@ export async function handleStream({
   let fullResponse = '';
   let streamResult = null;
 
-  // Stream the response
   const result = await streamWithFallback(
     messages,
     (chunk) => {
@@ -302,19 +406,56 @@ export async function handleStream({
   streamResult = result;
   fullResponse = result.content;
 
-  // Parse the complete response
   const parsed = parseAiResponse(fullResponse);
 
-  // Apply edits
   let updatedFiles = {};
   let appliedEdits = [];
   let failedEdits = [];
 
+  // Same three‑step fallback as in handleChat
   if ((parsed.edits && parsed.edits.length > 0) || (parsed.patches && parsed.patches.length > 0)) {
     const result = applyEdits(projectFiles, parsed.edits || [], parsed.patches || [], { activeFile });
     updatedFiles = result.updatedFiles;
     appliedEdits = result.applied;
     failedEdits = result.failed;
+  }
+
+  if (Object.keys(updatedFiles).length === 0) {
+    const fallbackEdits = extractCodeFromMessage(fullResponse);
+    if (fallbackEdits.length > 0) {
+      const result = applyEdits(projectFiles, fallbackEdits, [], { activeFile });
+      updatedFiles = result.updatedFiles;
+      appliedEdits = result.applied;
+      failedEdits = result.failed;
+      parsed.message = fullResponse.replace(/```[\s\S]*?```/g, '').trim() || parsed.message;
+    }
+  }
+
+  if (Object.keys(updatedFiles).length === 0) {
+    let filename = 'index.html';
+    const filenameMatch = fullResponse.match(/(?:created|updated|modified|changed)\s+([^\s]+\.(html|css|js|ts|tsx|jsx|json))/i);
+    if (filenameMatch) {
+      filename = filenameMatch[1];
+    } else if (message.toLowerCase().includes('html')) {
+      filename = 'index.html';
+    } else if (message.toLowerCase().includes('css')) {
+      filename = 'style.css';
+    } else if (message.toLowerCase().includes('javascript') || message.toLowerCase().includes('js')) {
+      filename = 'script.js';
+    }
+    const defaultCode = generateDefaultTemplate(filename);
+    const edit = { filename, code: defaultCode };
+    const result = applyEdits(projectFiles, [edit], [], { activeFile });
+    updatedFiles = result.updatedFiles;
+    appliedEdits = result.applied;
+    failedEdits = result.failed;
+    parsed.message = `✅ I've created a default \`${filename}\` template. Here it is:
+
+\`\`\`edit:${filename}
+${defaultCode}
+\`\`\`
+
+You can click **Apply** to add it to your project.`;
   }
 
   const finalResult = {
@@ -343,6 +484,7 @@ export async function handleStream({
 }
 
 // ─── HANDLE ANALYZE ─────────────────────────────────────────────────
+
 export async function handleAnalyze({
   projectFiles = {},
   provider = 'openrouter',
@@ -362,6 +504,7 @@ export async function handleAnalyze({
 }
 
 // ─── HANDLE EXPLAIN ─────────────────────────────────────────────────
+
 export async function handleExplain({
   projectFiles = {},
   filename,
@@ -393,18 +536,17 @@ ${fileContent}
 }
 
 // ─── CONTEXT ENHANCEMENT BUILDER ────────────────────────────────────
+
 function buildContextEnhancement(fileContext, projectFiles) {
   const parts = [];
 
   parts.push('=== PROJECT ANALYSIS ===');
 
-  // File type summary
   const typeSummary = Object.entries(fileContext.fileTypes)
     .map(([ext, count]) => `${ext}: ${count}`)
     .join(', ');
   parts.push(`File types: ${typeSummary} (total: ${fileContext.fileCount})`);
 
-  // HTML structure analysis
   if (fileContext.htmlStructure) {
     const html = fileContext.htmlStructure;
     parts.push(`\nHTML Structure Analysis:`);
@@ -418,7 +560,6 @@ function buildContextEnhancement(fileContext, projectFiles) {
     parts.push(`  Approx DOM depth: ${html.depth}`);
   }
 
-  // Import graph insights
   const heavilyImported = Object.entries(fileContext.importGraph)
     .filter(([_, data]) => data.importedBy.length > 2)
     .map(([file, data]) => `${file} (imported by ${data.importedBy.length} files)`);
@@ -427,13 +568,11 @@ function buildContextEnhancement(fileContext, projectFiles) {
     parts.push(`\nKey shared modules: ${heavilyImported.join(', ')}`);
   }
 
-  // Active file context
   if (fileContext.activeFile && projectFiles[fileContext.activeFile]) {
     const content = projectFiles[fileContext.activeFile];
     const lines = content.split('\n').length;
     parts.push(`\nCurrently editing: ${fileContext.activeFile} (${lines} lines)`);
 
-    // Detect component type
     if (content.includes('import React')) {
       parts.push('  Type: React component');
     } else if (content.includes('export default function') || content.includes('export function')) {
@@ -442,7 +581,6 @@ function buildContextEnhancement(fileContext, projectFiles) {
       parts.push('  Type: Type definitions');
     }
 
-    // Detect hooks used
     const hooks = ['useState', 'useEffect', 'useContext', 'useReducer', 'useMemo', 'useCallback', 'useRef'];
     const usedHooks = hooks.filter(h => content.includes(h));
     if (usedHooks.length > 0) {

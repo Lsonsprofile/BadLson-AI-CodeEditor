@@ -2,7 +2,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+// ─── Only these three providers are valid ──────────────────────────
 export type AiProvider = 'openrouter' | 'groq' | 'gemini';
+
+// ─── Helper to check if a provider is valid ────────────────────────
+function isValidProvider(provider: string): provider is AiProvider {
+  return ['openrouter', 'groq', 'gemini'].includes(provider);
+}
 
 export interface AiProviderState {
   provider: AiProvider;
@@ -123,24 +129,42 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           editorOptions: { ...state.editorOptions, ...options },
         })),
       setAiProvider: (updates) =>
-        set((state) => ({
-          aiProvider: { ...state.aiProvider, ...updates },
-        })),
+        set((state) => {
+          // Ensure the provider is always valid
+          let newProvider = updates.provider ?? state.aiProvider.provider;
+          if (!isValidProvider(newProvider)) {
+            newProvider = 'openrouter';
+          }
+          return {
+            aiProvider: {
+              ...state.aiProvider,
+              ...updates,
+              provider: newProvider,
+            },
+          };
+        }),
       setCurrentProject: (project) => set({ currentProject: project }),
       setProjects: (projects) => set({ projects }),
       setWorkspaceState: (workspaceState) =>
-        set((state) => ({
-          ...state,
-          ...workspaceState,
-          editorOptions: {
-            ...state.editorOptions,
-            ...(workspaceState.editorOptions ?? {}),
-          },
-          aiProvider: {
+        set((state) => {
+          // Validate provider if it's being set
+          let aiProvider = {
             ...state.aiProvider,
             ...(workspaceState.aiProvider ?? {}),
-          },
-        })),
+          };
+          if (!isValidProvider(aiProvider.provider)) {
+            aiProvider.provider = 'openrouter';
+          }
+          return {
+            ...state,
+            ...workspaceState,
+            editorOptions: {
+              ...state.editorOptions,
+              ...(workspaceState.editorOptions ?? {}),
+            },
+            aiProvider,
+          };
+        }),
       setAuthUser: (user) => set({ authUser: user }),
       addChatMessage: (role, content) =>
         set((state) => {
@@ -148,7 +172,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const trimmedHistory = [...state.chatHistory, newMessage].slice(-20);
           return { chatHistory: trimmedHistory };
         }),
-      // Add this new method for convenience
       addMessage: (message) =>
         set((state) => {
           const newMessage = {
@@ -229,23 +252,40 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'workspace-store',
-      partialize: (state) => ({
-        files: state.files,
-        folders: state.folders,
-        activeFile: state.activeFile,
-        openFiles: state.openFiles,
-        sidebarVisible: state.sidebarVisible,
-        aiPanelVisible: state.aiPanelVisible,
-        previewDevice: state.previewDevice,
-        isRunning: state.isRunning,
-        editorOptions: state.editorOptions,
-        aiProvider: state.aiProvider,
-        currentProject: state.currentProject,
-        projects: state.projects,
-        chatHistory: state.chatHistory,
-        isAiTyping: state.isAiTyping,
-        authUser: state.authUser,
-      }),
+      partialize: (state) => {
+        // When persisting, ensure provider is valid
+        let aiProvider = state.aiProvider;
+        if (!isValidProvider(aiProvider.provider)) {
+          aiProvider = { ...aiProvider, provider: 'openrouter' };
+        }
+        return {
+          files: state.files,
+          folders: state.folders,
+          activeFile: state.activeFile,
+          openFiles: state.openFiles,
+          sidebarVisible: state.sidebarVisible,
+          aiPanelVisible: state.aiPanelVisible,
+          previewDevice: state.previewDevice,
+          isRunning: state.isRunning,
+          editorOptions: state.editorOptions,
+          aiProvider,
+          currentProject: state.currentProject,
+          projects: state.projects,
+          chatHistory: state.chatHistory,
+          isAiTyping: state.isAiTyping,
+          authUser: state.authUser,
+        };
+      },
+      // ─── MIGRATION to reset invalid provider ──────────────────────
+      version: 1,
+      migrate: (persistedState: any, version: number) => {
+        if (persistedState?.aiProvider?.provider) {
+          if (!isValidProvider(persistedState.aiProvider.provider)) {
+            persistedState.aiProvider.provider = 'openrouter';
+          }
+        }
+        return persistedState;
+      },
     }
   )
 );
