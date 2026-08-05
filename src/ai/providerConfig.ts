@@ -12,6 +12,16 @@ export interface ProviderConfig {
   desc: string;
 }
 
+// ─── DEFAULT CONFIG (used as fallback for unknown keys) ──────────
+const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
+  label: 'Unknown',
+  color: 'text-slate-400',
+  bg: 'bg-slate-500/10',
+  border: 'border-slate-500/20',
+  icon: Globe,
+  desc: 'Unknown provider',
+};
+
 export const PROVIDER_CONFIG: Record<AiProviderKey, ProviderConfig> = {
   openrouter: {
     label: 'OpenRouter',
@@ -41,10 +51,33 @@ export const PROVIDER_CONFIG: Record<AiProviderKey, ProviderConfig> = {
 
 export const PROVIDER_KEYS = Object.keys(PROVIDER_CONFIG) as AiProviderKey[];
 
-export function getProviderConfig(key: AiProviderKey): ProviderConfig {
-  return PROVIDER_CONFIG[key];
+/**
+ * Get provider config with fallback for unknown keys.
+ * This prevents runtime errors when accessing undefined properties.
+ */
+export function getProviderConfig(key: string | AiProviderKey): ProviderConfig {
+  if (key && key in PROVIDER_CONFIG) {
+    return PROVIDER_CONFIG[key as AiProviderKey];
+  }
+  // Return a copy of the default config to avoid mutation
+  return { ...DEFAULT_PROVIDER_CONFIG };
 }
 
+/**
+ * Type guard to check if a string is a valid provider key.
+ */
 export function isProviderKey(key: string): key is AiProviderKey {
   return key in PROVIDER_CONFIG;
+}
+
+/**
+ * Safely get a specific config value with optional fallback.
+ * Useful for accessing nested properties without optional chaining every time.
+ */
+export function getProviderValue<K extends keyof ProviderConfig>(
+  key: string | AiProviderKey,
+  field: K
+): ProviderConfig[K] {
+  const config = getProviderConfig(key);
+  return config[field];
 }

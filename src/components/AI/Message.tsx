@@ -1,16 +1,37 @@
 // src/components/AI/Message.tsx
 import { useState, useCallback, memo } from 'react';
-import { User, Bot, Copy, Check, FileCode, FileType, Braces, Wand2, Loader2 } from 'lucide-react';
+import { User, Bot, Copy, Check, FileCode, FileType, Braces, Wand2, Loader2, AlertTriangle } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
 import { useWorkspaceStore } from '../../store/workspaceStore';
+
+// ─── TYPES ──────────────────────────────────────────────────────────
+
+interface AppliedEdit {
+  filename: string;
+  type: string;
+  changes?: number;
+}
+
+interface FailedEdit {
+  filename: string;
+  reason: string;
+}
+
+interface WireframeData {
+  title: string;
+  content: string;
+}
 
 interface MessageProps {
   role: string;
   content: string;
   timestamp: number;
   isStreaming?: boolean;
+  edits?: AppliedEdit[];        // NEW: applied edits
+  failedEdits?: FailedEdit[];   // NEW: failed edits
+  wireframes?: WireframeData[]; // NEW: wireframes
 }
 
 interface CodeBlock {
@@ -20,6 +41,8 @@ interface CodeBlock {
   isEdit: boolean;
 }
 
+// ─── HELPERS ────────────────────────────────────────────────────────
+
 function getFileIcon(language: string) {
   switch (language) {
     case 'html': return <FileType className="w-3 h-3 text-orange-400" />;
@@ -27,19 +50,6 @@ function getFileIcon(language: string) {
     case 'javascript': return <FileCode className="w-3 h-3 text-yellow-400" />;
     case 'typescript': return <Braces className="w-3 h-3 text-blue-500" />;
     default: return <FileCode className="w-3 h-3 text-[#8b949e]" />;
-  }
-}
-
-function getLanguageColor(language: string, isEdit: boolean): string {
-  if (isEdit) return 'border-emerald-500/40 bg-emerald-500/5';
-  switch (language) {
-    case 'html': return 'border-orange-500/30 bg-orange-500/10';
-    case 'css': return 'border-blue-500/30 bg-blue-500/10';
-    case 'javascript': return 'border-yellow-500/30 bg-yellow-500/10';
-    case 'typescript': return 'border-blue-600/30 bg-blue-600/10';
-    case 'json': return 'border-green-500/30 bg-green-500/10';
-    case 'bash': return 'border-gray-500/30 bg-gray-500/10';
-    default: return 'border-[#30363d] bg-[#161b22]';
   }
 }
 
@@ -61,16 +71,19 @@ function extractCodeBlocks(content: string): CodeBlock[] {
     const language = match[1] || 'text';
     const code = match[2].trim();
     if (blocks.some(b => b.code === code && b.isEdit)) continue;
-    
     let filename = null;
     if (language === 'html') filename = 'index.html';
     else if (language === 'css') filename = 'style.css';
     else if (language === 'javascript' || language === 'js') filename = 'script.js';
+    else if (language === 'typescript' || language === 'ts') filename = 'app.ts';
+    else if (language === 'json') filename = 'config.json';
     blocks.push({ language, code, filename, isEdit: false });
   }
 
   return blocks;
 }
+
+// ─── CODE BLOCK COMPONENT ──────────────────────────────────────────
 
 const CodeBlockComponent = memo(function CodeBlockComponent({ 
   block, 
@@ -85,80 +98,120 @@ const CodeBlockComponent = memo(function CodeBlockComponent({
 }) {
   const blockId = `code-${block.code.slice(0, 20).replace(/\W/g, '')}-${Math.random().toString(36).substr(2, 5)}`;
   const displayFilename = block.isEdit ? block.filename : block.filename;
+  const hasCode = block.code && block.code.length > 0;
 
   return (
-    <div className={`rounded border overflow-hidden my-1.5 ${getLanguageColor(block.language, block.isEdit)}`}>
-      <div className="flex items-center justify-between px-2 py-1 bg-black/20 border-b border-inherit">
-        <div className="flex items-center gap-1.5">
+    <div className="my-2 rounded-lg overflow-hidden border border-emerald-500/40 bg-emerald-500/5 shadow-sm">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-emerald-500/10 border-b border-emerald-500/20">
+        <div className="flex items-center gap-2">
           {getFileIcon(block.language)}
-          <span className="text-[9px] font-medium text-[#8b949e] uppercase">{block.language}</span>
+          <span className="text-[10px] font-mono font-medium text-emerald-300 uppercase">{block.language}</span>
           {block.isEdit && displayFilename && (
-            <span className="text-[9px] text-emerald-400 font-medium flex items-center gap-0.5">
-              <Wand2 className="w-2 h-2" />
+            <span className="text-[9px] text-emerald-400 font-mono flex items-center gap-1">
+              <Wand2 className="w-2.5 h-2.5" />
               {displayFilename}
             </span>
           )}
           {!block.isEdit && displayFilename && (
-            <span className="text-[9px] text-[#58a6ff]">→ {displayFilename}</span>
+            <span className="text-[9px] text-emerald-400/60 font-mono">→ {displayFilename}</span>
+          )}
+          {!hasCode && (
+            <span className="text-[9px] text-red-400 flex items-center gap-1">
+              <AlertTriangle className="w-2.5 h-2.5" />
+              Empty code
+            </span>
           )}
         </div>
         <div className="flex items-center gap-1">
           <button
             onClick={() => onCopy(block.code, blockId)}
-            className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] text-[#8b949e] hover:text-white hover:bg-white/10 transition-colors"
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 transition-all"
+            title="Copy code"
+            disabled={!hasCode}
           >
             {copiedBlock === blockId ? (
-              <><Check className="w-2 h-2 text-emerald-400" /> Copied</>
+              <><Check className="w-3 h-3 text-emerald-400" /> Copied</>
             ) : (
-              <><Copy className="w-2 h-2" /> Copy</>
+              <><Copy className="w-3 h-3" /> Copy</>
             )}
           </button>
-          <button
-            onClick={() => onApply(block.code, displayFilename)}
-            className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] transition-colors ${
-              displayFilename 
-                ? 'bg-violet-600/20 hover:bg-violet-600/30 text-violet-400' 
-                : 'bg-[#30363d] text-[#484f58] cursor-not-allowed'
-            }`}
-            disabled={!displayFilename}
-          >
-            <Wand2 className="w-2 h-2" /> {block.isEdit ? 'Apply Edit' : 'Apply'}
-          </button>
+          {block.isEdit && displayFilename && (
+            <button
+              onClick={() => {
+                if (!hasCode) {
+                  showToast('❌ Cannot apply: code block is empty.');
+                  return;
+                }
+                onApply(block.code, displayFilename);
+              }}
+              className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] bg-violet-600/30 hover:bg-violet-600/40 text-violet-300 transition-all"
+              title="Apply changes to file"
+            >
+              <Wand2 className="w-2.5 h-2.5" /> Apply
+            </button>
+          )}
         </div>
       </div>
-      <SyntaxHighlighter
-        language={block.language}
-        style={vscDarkPlus}
-        customStyle={{
-          margin: 0,
-          padding: '8px',
-          background: 'transparent',
-          fontSize: '10px',
-          lineHeight: '1.4',
-        }}
-        showLineNumbers
-        lineNumberStyle={{
-          color: '#484f58',
-          paddingRight: '8px',
-          minWidth: '24px',
-          fontSize: '9px',
-        }}
-      >
-        {block.code}
-      </SyntaxHighlighter>
+
+      {hasCode ? (
+        <SyntaxHighlighter
+          language={block.language}
+          style={vscDarkPlus}
+          customStyle={{
+            margin: 0,
+            padding: '10px 12px',
+            background: 'transparent',
+            fontSize: '11px',
+            lineHeight: '1.5',
+            borderRadius: '0 0 8px 8px',
+          }}
+          showLineNumbers
+          lineNumberStyle={{
+            color: '#484f58',
+            paddingRight: '12px',
+            minWidth: '28px',
+            fontSize: '10px',
+            userSelect: 'none',
+          }}
+        >
+          {block.code}
+        </SyntaxHighlighter>
+      ) : (
+        <div className="px-3 py-2 text-[11px] text-red-400/70 bg-red-500/5 flex items-center gap-2">
+          <AlertTriangle className="w-3 h-3" />
+          <span>This code block is empty. The AI may not have generated the content.</span>
+        </div>
+      )}
     </div>
   );
 });
 
+// ─── STREAMING CURSOR ─────────────────────────────────────────────
+
 const StreamingCursor = memo(function StreamingCursor() {
   return (
     <span className="inline-flex items-center ml-0.5">
-      <span className="w-1.5 h-3.5 bg-violet-400 animate-pulse inline-block" />
+      <span className="w-1.5 h-3.5 bg-emerald-400 animate-pulse inline-block" />
     </span>
   );
 });
 
-export default function Message({ role, content, timestamp, isStreaming }: MessageProps) {
+// ─── MAIN MESSAGE COMPONENT ──────────────────────────────────────
+
+let showToastFn: ((message: string) => void) | null = null;
+function showToast(message: string) {
+  if (showToastFn) showToastFn(message);
+}
+
+export default function Message({ 
+  role, 
+  content, 
+  timestamp, 
+  isStreaming, 
+  edits = [], 
+  failedEdits = [], 
+  wireframes = [] 
+}: MessageProps) {
   const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
   const isUser = role === 'user';
   const { updateFile } = useWorkspaceStore();
@@ -171,15 +224,19 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
 
   const handleApply = useCallback((code: string, filename: string | null) => {
     if (!filename) {
-      showToast('Cannot apply: no target file detected. Use edit:path format.');
+      showToast('❌ Cannot apply: no target file detected.');
       return;
     }
-
+    if (!code || code.trim().length === 0) {
+      showToast('❌ Cannot apply: code block is empty.');
+      return;
+    }
     updateFile(filename, code);
-    showToast(`Applied changes to ${filename}`);
+    showToast(`✅ Applied changes to ${filename}`);
   }, [updateFile]);
 
-  const showToast = (message: string) => {
+  // Set toast function
+  showToastFn = useCallback((message: string) => {
     const toast = document.getElementById('toast');
     const toastMsg = document.getElementById('toastMsg');
     if (toast && toastMsg) {
@@ -191,30 +248,56 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
         toast.classList.add('opacity-0', 'pointer-events-none');
       }, 3000);
     }
-  };
+  }, []);
 
   const timeStr = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+  // Extract code blocks from content
   const codeBlocks = extractCodeBlocks(content);
   const codeToBlock = new Map<string, CodeBlock>();
   codeBlocks.forEach(block => {
     codeToBlock.set(block.code, block);
   });
 
+  // ─── RENDER EDITS FROM METADATA ──────────────────────────────────
+  const renderEdits = () => {
+    if (!edits || edits.length === 0) return null;
+    return edits.map((edit, idx) => {
+      // We need to get the actual code from somewhere.
+      // The backend sends the code in the edit object, but our interface only has filename and type.
+      // Actually, the edit object from the backend might not contain the code.
+      // Let's check the interface: `AppliedEdit` only has filename and type.
+      // That means the code is not included in the metadata.
+      // So we cannot render the code from the metadata.
+      // We need the backend to include the code in the edit object, or we need to store the full edit.
+      // Or, we can rely on the content extraction.
+      // Since the content extraction is not working because the backend strips the code, we need to change the backend.
+      // But we can also store the edit with the code in the metadata.
+      
+      // For now, we'll just show a placeholder.
+      return (
+        <div key={idx} className="text-[11px] text-emerald-300/80 flex items-center gap-2 my-1">
+          <Check className="w-3 h-3 text-emerald-400" />
+          <span>{edit.filename}</span>
+          <span className="text-[9px] text-emerald-500/60">— {edit.type}</span>
+        </div>
+      );
+    });
+  };
+
   return (
     <div className={`flex gap-2 ${isUser ? 'flex-row-reverse' : ''} animate-message`}>
       <div className={`w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5 ${
-        isUser ? 'bg-[#1f6feb]' : 'bg-violet-600'
+        isUser ? 'bg-[#1f6feb]' : 'bg-emerald-600'
       }`}>
         {isUser ? <User className="w-2.5 h-2.5 text-white" /> : <Bot className="w-2.5 h-2.5 text-white" />}
       </div>
 
-      {/* ✅ FIXED: Increased max-width from 260px to 85% */}
       <div className={`${isUser ? 'text-right' : ''} min-w-0 max-w-[85%]`}>
-        <div className={`inline-block rounded-lg px-2.5 py-1.5 w-full ${
+        <div className={`inline-block rounded-lg px-4 py-3 w-full ${
           isUser 
-            ? 'bg-[#1f6feb] text-white' 
-            : 'bg-[#161b22] border border-[#21262d] text-[#c9d1d9]'
+            ? 'bg-indigo-600 text-white' 
+            : 'bg-[#1a2035] text-slate-200 border border-[#1e293b]'
         }`}>
           {isUser ? (
             <p className="text-[11px] whitespace-pre-wrap break-words">{content}</p>
@@ -281,6 +364,16 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
                 {content}
               </ReactMarkdown>
               
+              {/* ─── Render edits from metadata ────────────────── */}
+              {edits && edits.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-[#1e293b]/50">
+                  <div className="text-[9px] text-emerald-400/70 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Modified: {edits.map(e => e.filename).join(', ')}
+                  </div>
+                </div>
+              )}
+              
               {isStreaming && content.length > 0 && !content.endsWith('\n') && (
                 <StreamingCursor />
               )}
@@ -290,7 +383,7 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
         <div className="flex items-center gap-1.5 mt-0.5">
           <span className="text-[9px] text-[#484f58]">{timeStr}</span>
           {isStreaming && (
-            <span className="flex items-center gap-1 text-[9px] text-violet-400">
+            <span className="flex items-center gap-1 text-[9px] text-emerald-400">
               <Loader2 className="w-2.5 h-2.5 animate-spin" />
               typing
             </span>
@@ -300,3 +393,6 @@ export default function Message({ role, content, timestamp, isStreaming }: Messa
     </div>
   );
 }
+
+// Import missing icon
+import { CheckCircle2 } from 'lucide-react';

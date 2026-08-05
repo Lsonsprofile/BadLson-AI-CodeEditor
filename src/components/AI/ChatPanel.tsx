@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 import { useApiHealth } from '@/hooks/useApiHealth';
-import { PROVIDER_CONFIG, type AiProviderKey } from '@/ai/providerConfig';
+import { PROVIDER_CONFIG, getProviderConfig, type AiProviderKey } from '@/ai/providerConfig';
 
 // ─── TYPES ──────────────────────────────────────────────────────────
 
@@ -424,7 +424,6 @@ export default function ChatPanel() {
       const projectFiles = buildProjectFiles();
       console.log(`📁 Sending ${Object.keys(projectFiles).length} files`);
 
-      // ✅ FIXED: Use environment variable, NOT hardcoded localhost
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
       console.log('🌐 Using API URL:', API_URL);
 
@@ -581,6 +580,9 @@ export default function ChatPanel() {
 
   // ─── RENDER ──────────────────────────────────────────────────────
 
+  const providerConfig = getProviderConfig(aiProvider.provider);
+  const providerLabel = providerConfig.label;
+
   return (
     <div className="w-full h-full bg-[#0b0f19] flex flex-col border-l border-[#1e293b]">
       {/* ─── HEADER ────────────────────────────────────────────────── */}
@@ -621,27 +623,30 @@ export default function ChatPanel() {
               {aiProvider.provider === 'openrouter' && <Globe className="w-3 h-3 text-emerald-400" />}
               {aiProvider.provider === 'groq' && <Zap className="w-3 h-3 text-amber-400" />}
               {aiProvider.provider === 'gemini' && <Brain className="w-3 h-3 text-blue-400" />}
-              <span>{PROVIDER_CONFIG[aiProvider.provider as AiProviderKey]?.label || aiProvider.provider}</span>
+              <span>{providerLabel}</span>
               <ChevronDown className="w-3 h-3 text-slate-500" />
             </button>
             
             {isDropdownOpen && (
               <div className="absolute right-0 mt-1 w-48 rounded-lg border border-[#1e293b] bg-[#0d1117] shadow-2xl z-50 overflow-hidden">
-                {(Object.keys(PROVIDER_CONFIG) as AiProviderKey[]).map((key) => (
-                  <button
-                    key={key}
-                    onClick={() => handleProviderSwitch(key)}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[#1a2035] transition ${
-                      aiProvider.provider === key ? 'bg-indigo-500/10 text-indigo-400' : 'text-slate-300'
-                    }`}
-                  >
-                    {key === 'openrouter' && <Globe className="w-3.5 h-3.5 text-emerald-400" />}
-                    {key === 'groq' && <Zap className="w-3.5 h-3.5 text-amber-400" />}
-                    {key === 'gemini' && <Brain className="w-3.5 h-3.5 text-blue-400" />}
-                    {PROVIDER_CONFIG[key].label}
-                    <span className="text-[9px] text-slate-500 ml-auto">{PROVIDER_CONFIG[key].desc}</span>
-                  </button>
-                ))}
+                {(Object.keys(PROVIDER_CONFIG) as AiProviderKey[]).map((key) => {
+                  const cfg = getProviderConfig(key);
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => handleProviderSwitch(key)}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[#1a2035] transition ${
+                        aiProvider.provider === key ? 'bg-indigo-500/10 text-indigo-400' : 'text-slate-300'
+                      }`}
+                    >
+                      {key === 'openrouter' && <Globe className="w-3.5 h-3.5 text-emerald-400" />}
+                      {key === 'groq' && <Zap className="w-3.5 h-3.5 text-amber-400" />}
+                      {key === 'gemini' && <Brain className="w-3.5 h-3.5 text-blue-400" />}
+                      {cfg.label}
+                      <span className="text-[9px] text-slate-500 ml-auto">{cfg.desc}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -899,7 +904,7 @@ export default function ChatPanel() {
         <div className="flex justify-between mt-1.5 px-1">
           <p className="text-[9px] text-slate-500">Shift + Enter for new line • AI reads your files automatically</p>
           <p className="text-[9px] text-slate-500">
-            {isBusy ? '⏹️ Click stop to cancel' : `Using ${PROVIDER_CONFIG[aiProvider.provider as AiProviderKey]?.label || aiProvider.provider}`}
+            {isBusy ? '⏹️ Click stop to cancel' : `Using ${providerLabel}`}
           </p>
         </div>
       </div>
