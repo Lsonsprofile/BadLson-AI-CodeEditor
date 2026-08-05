@@ -280,14 +280,12 @@ export default function Header() {
       <header className="h-11 bg-[#0f1322] border-b border-[#1e293b] flex items-center justify-between px-3 shrink-0 z-50">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            <div className="w-7 h-7 rounded-md bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-900/20">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
+            
             <span className="text-sm font-semibold text-white tracking-tight hidden sm:inline">
               BadLson_AI_code Editor
             </span>
             <span className="text-[10px] bg-indigo-500/15 text-indigo-400 px-1.5 py-0.5 rounded font-medium">
-              Beta
+              Code Editor
             </span>
           </div>
 
