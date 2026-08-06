@@ -16,7 +16,8 @@ import { getAiModels, type AiModelsResponse } from '../../services/api';
 
 interface SettingsPanelProps {
   isOpen: boolean;
-  onClose: () => void}
+  onClose: () => void;
+}
 
 export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const { editorOptions, setEditorOptions, aiProvider, setAiProvider } = useWorkspaceStore();
@@ -89,26 +90,26 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   ];
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="bg-[#111625] border border-[#1e293b] rounded-lg shadow-2xl w-[520px] max-h-[85vh] flex flex-col">
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-[#0a0a0a] border border-[#2d2d2d] rounded-lg shadow-2xl w-[520px] max-h-[85vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e293b]">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[#2d2d2d]">
           <h2 className="text-sm font-semibold text-white">Settings</h2>
-          <button onClick={onClose} className="p-1 hover:bg-[#1a2035] rounded transition">
+          <button onClick={onClose} className="p-1 hover:bg-[#1a1a1a] rounded transition">
             <X className="w-4 h-4 text-slate-400" />
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-[#1e293b]">
+        <div className="flex border-b border-[#2d2d2d]">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`flex items-center gap-1.5 px-4 py-2 text-[11px] transition ${
                 activeTab === tab.id
-                  ? 'text-indigo-400 border-b-2 border-indigo-500 bg-[#161d30]'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-[#161d30]'
+                  ? 'text-indigo-400 border-b-2 border-indigo-500 bg-[#121212]'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-[#121212]'
               }`}
             >
               <tab.icon className="w-3.5 h-3.5" />
@@ -132,7 +133,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                     type="number"
                     value={editorOptions.fontSize}
                     onChange={(e) => setEditorOptions({ fontSize: parseInt(e.target.value) || 13 })}
-                    className="w-16 bg-[#161d30] border border-[#1e293b] rounded px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-indigo-500"
+                    className="w-16 bg-[#121212] border border-[#2d2d2d] rounded px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-indigo-500"
                     min={8}
                     max={32}
                   />
@@ -140,7 +141,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                 </div>
               </div>
 
-              <div className="h-px bg-[#1e293b]" />
+              <div className="h-px bg-[#2d2d2d]" />
 
               <div className="flex items-center justify-between">
                 <div>
@@ -150,14 +151,14 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                 <select
                   value={editorOptions.tabSize}
                   onChange={(e) => setEditorOptions({ tabSize: parseInt(e.target.value) })}
-                  className="bg-[#161d30] border border-[#1e293b] rounded px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-indigo-500"
+                  className="bg-[#121212] border border-[#2d2d2d] rounded px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-indigo-500"
                 >
                   <option value={2}>2 spaces</option>
                   <option value={4}>4 spaces</option>
                 </select>
               </div>
 
-              <div className="h-px bg-[#1e293b]" />
+              <div className="h-px bg-[#2d2d2d]" />
 
               <div className="flex items-center justify-between">
                 <div>
@@ -172,7 +173,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                 </button>
               </div>
 
-              <div className="h-px bg-[#1e293b]" />
+              <div className="h-px bg-[#2d2d2d]" />
 
               <div className="flex items-center justify-between">
                 <div>
@@ -205,12 +206,13 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                 </button>
               </div>
 
-              <div className="h-px bg-[#1e293b]" />
+              <div className="h-px bg-[#2d2d2d]" />
 
               <div>
-                <label className="text-[11px] font-medium text-slate-200 mb-2 block">Theme</label>
+                <label className="text-[11px] font-medium text-slate-200 mb-2 block">Editor Theme</label>
                 <div className="grid grid-cols-3 gap-2">
                   {[
+                    { key: 'mokai-dark', label: 'Mokai Dark' },
                     { key: 'vs-dark', label: 'Dark' },
                     { key: 'vs-light', label: 'Light' },
                     { key: 'hc-black', label: 'High Contrast' },
@@ -223,13 +225,18 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                       className={`px-3 py-2 rounded-md text-[10px] border transition ${
                         editorOptions.theme === theme.key
                           ? 'border-indigo-500 bg-indigo-500/10 text-indigo-400'
-                          : 'border-[#1e293b] text-slate-400 hover:border-[#334155]'
+                          : 'border-[#2d2d2d] text-slate-400 hover:border-[#404040]'
                       }`}
                     >
                       {theme.label}
                     </button>
                   ))}
                 </div>
+                {editorOptions.theme === 'mokai-dark' && (
+                  <p className="mt-2 text-[10px] text-indigo-400/70 flex items-center gap-1.5">
+                    <Zap className="w-3 h-3" /> Ultra-dark background with Mokai-inspired syntax
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -250,7 +257,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition text-left ${
                         aiProvider.provider === p.id
                           ? `${p.borderColor} ${p.bgColor}`
-                          : 'border-[#1e293b] hover:border-[#334155]'
+                          : 'border-[#2d2d2d] hover:border-[#404040]'
                       }`}
                     >
                       <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
@@ -274,7 +281,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                 </div>
               </div>
 
-              <div className="h-px bg-[#1e293b]" />
+              <div className="h-px bg-[#2d2d2d]" />
 
               {/* OpenRouter Model Selection */}
               {aiProvider.provider === 'openrouter' && (
@@ -304,7 +311,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                     <select
                       value={aiProvider.preferredOpenRouterModel || ''}
                       onChange={(e) => setAiProvider({ preferredOpenRouterModel: e.target.value || null })}
-                      className="w-full bg-[#161d30] border border-[#1e293b] rounded px-2 py-1.5 text-[11px] text-slate-200 outline-none focus:border-indigo-500 mb-2"
+                      className="w-full bg-[#121212] border border-[#2d2d2d] rounded px-2 py-1.5 text-[11px] text-slate-200 outline-none focus:border-indigo-500 mb-2"
                     >
                       <option value="">Auto-rotate (recommended)</option>
                       {freeModels.map((model) => (
@@ -326,7 +333,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                     )}
                   </div>
 
-                  <div className="h-px bg-[#1e293b]" />
+                  <div className="h-px bg-[#2d2d2d]" />
                 </>
               )}
 
@@ -350,7 +357,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
               </div>
 
               {/* Status Summary */}
-              <div className="bg-[#0d1117] border border-[#1e293b] rounded-lg p-3 space-y-2">
+              <div className="bg-[#0d1117] border border-[#2d2d2d] rounded-lg p-3 space-y-2">
                 <div className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Current Setup</div>
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -395,9 +402,9 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                 { key: 'Alt + Up/Down', action: 'Move line' },
                 { key: 'Ctrl + Shift + F', action: 'Format code' },
               ].map((shortcut, index) => (
-                <div key={index} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-[#161d30] transition">
+                <div key={index} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-[#121212] transition">
                   <span className="text-[11px] text-slate-300">{shortcut.action}</span>
-                  <kbd className="px-2 py-0.5 bg-[#161d30] border border-[#1e293b] rounded text-[10px] text-slate-400 code-font">
+                  <kbd className="px-2 py-0.5 bg-[#121212] border border-[#2d2d2d] rounded text-[10px] text-slate-400 code-font">
                     {shortcut.key}
                   </kbd>
                 </div>
@@ -407,7 +414,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-[#1e293b]">
+        <div className="flex justify-end gap-2 px-4 py-3 border-t border-[#2d2d2d]">
           <button onClick={onClose} className="px-3 py-1.5 text-[11px] text-slate-400 hover:text-slate-200 transition">
             Cancel
           </button>

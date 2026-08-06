@@ -5,6 +5,11 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        // Add Mokai custom dark palette
+        'mokai-dark': '#0a0a0a',
+        'mokai-panel': '#121212',
+        'mokai-border': '#2d2d2d',
+        // Keep existing HSL variables
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",

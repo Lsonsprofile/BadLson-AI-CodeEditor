@@ -1,15 +1,11 @@
 // src/components/Layout/Header.tsx
 import { useState, useRef, useEffect } from 'react';
 import {
-  Play,
   Save,
   FileCode,
   Sparkles,
   LayoutTemplate,
   FolderOpen,
-  Monitor,
-  Smartphone,
-  Tablet,
   Plus,
   Share2,
   Trash2,
@@ -31,8 +27,6 @@ export default function Header() {
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   const {
-    previewDevice,
-    setPreviewDevice,
     toggleSidebar,
     toggleAiPanel,
     aiPanelVisible,
@@ -280,9 +274,13 @@ export default function Header() {
       <header className="h-11 bg-[#0f1322] border-b border-[#1e293b] flex items-center justify-between px-3 shrink-0 z-50">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            
+            <img
+              src="/images/kids-tech.png"
+              alt="Kids Tech Global"
+              className="h-8 w-auto object-contain"
+            />
             <span className="text-sm font-semibold text-white tracking-tight hidden sm:inline">
-              BadLson_AI_code Editor
+              KIDS TECH GLOBAL
             </span>
             <span className="text-[10px] bg-indigo-500/15 text-indigo-400 px-1.5 py-0.5 rounded font-medium">
               Code Editor
@@ -363,31 +361,7 @@ export default function Header() {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          <div className="flex items-center bg-[#1a2035] rounded-lg p-0.5">
-            <button
-              onClick={() => setPreviewDevice('desktop')}
-              className={`p-1.5 rounded-md transition ${previewDevice === 'desktop' ? 'bg-[#252d47] text-indigo-400' : 'text-slate-500 hover:text-slate-300'}`}
-              title="Desktop View"
-            >
-              <Monitor className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setPreviewDevice('tablet')}
-              className={`p-1.5 rounded-md transition ${previewDevice === 'tablet' ? 'bg-[#252d47] text-indigo-400' : 'text-slate-500 hover:text-slate-300'}`}
-              title="Tablet View"
-            >
-              <Tablet className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setPreviewDevice('mobile')}
-              className={`p-1.5 rounded-md transition ${previewDevice === 'mobile' ? 'bg-[#252d47] text-indigo-400' : 'text-slate-500 hover:text-slate-300'}`}
-              title="Mobile View"
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div className="h-5 w-px bg-[#1e293b]" />
+          {/* Device toggles removed – they now live inside the LivePreview panel */}
 
           <button
             onClick={toggleAiPanel}

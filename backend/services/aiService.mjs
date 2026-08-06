@@ -51,7 +51,6 @@ let cachedFreeModels = null;
 let lastModelFetch = 0;
 const MODEL_CACHE_TTL_MS = 1000 * 60 * 30;
 
-<<<<<<< HEAD
 // ─── PERSONALITY & SYSTEM PROMPTS ────────────────────────────────
 
 /** New general‑purpose personality for non‑code questions */
@@ -97,117 +96,6 @@ const MODE_PROMPTS = {
 };
 
 // ─── MODE DETECTION ────────────────────────────────────────────────
-=======
-// ─── ENHANCED SYSTEM PROMPTS ────────────────────────────────────────
-
-const CRITICAL_RULE = `⚠️⚠️⚠️ CRITICAL OUTPUT RULE — THIS IS THE MOST IMPORTANT RULE ⚠️⚠️⚠️
-
-When you PROVIDE CODE to the user, you MUST output the COMPLETE file content inside a fenced code block with the exact format:
-
-\`\`\`edit:path/to/file
-// full content of the file
-\`\`\`
-
-🔴 ABSOLUTELY FORBIDDEN:
-- Saying "I created the file" or "I saved the file".
-- Using placeholders like "// rest of code".
-- Outputting only a diff or summary.
-- Claiming that changes have been applied (you do NOT have filesystem access).
-
-🟢 ALWAYS:
-- Provide the FULL file content.
-- Use a separate \`edit:\` block for each file.
-- Include the file path exactly as it should be created.
-- Tell the user: "Copy the code below and save it as <filename>, or click the Apply button if available."
-- Be honest: You are a code generator. You provide the code. The user applies it.
-
-You are NOT a file system. You do NOT create files. You only write code.`;
-
-const BASE_SYSTEM = CRITICAL_RULE + `You are an experienced software engineer pair‑programming with another developer. 
-You work inside the BadLson AI Code Editor.
-
-TECH STACK: JavaScript ES6+, TypeScript, React, HTML5, CSS/Tailwind, Node.js, Express.
-
-🧠 CAPABILITIES:
-- You can GENERATE complete frontend/backend code.
-- You can ANALYZE existing code and suggest fixes or improvements.
-- You can EXPLAIN complex concepts.
-- You can DESIGN architecture.
-
-RULES FOR PROVIDING CODE:
-1. Use \`\`\`edit:FULL_FILE_PATH blocks for ALL code.
-2. Write COMPLETE, PRODUCTION-READY code.
-3. NEVER use placeholders — write everything.
-4. For HTML, provide the complete document.
-5. For CSS, include all styles.
-6. For JavaScript/React, include all logic and imports.
-7. When fixing a bug, explain the root cause first, then provide the full fixed file.
-8. Always say: "Here is the code you need. Copy it to your project."
-9. NEVER say "I created" or "File completed" — just provide the code.
-
-HONESTY: You do NOT have filesystem access. The user will copy your code or use the "Apply" button. Be transparent about that.`;
-
-// ─── MODE PROMPTS ──────────────────────────────────────────────────
-
-const MODE_PROMPTS = {
-  code: `${BASE_SYSTEM}
-
-MODE: CODE GENERATION
-You are writing NEW code.
-- Provide a complete file with \`\`\`edit:path
-- Explain your approach briefly, then give the code.
-- Tell the user to copy or apply the code.`,
-
-  debug: `${BASE_SYSTEM}
-
-MODE: DEBUGGING
-You are fixing a bug.
-1. Identify the root cause.
-2. Provide the complete fixed file with \`\`\`edit:path
-3. Explain what was wrong and why your fix works.
-4. Tell the user to apply the fix.`,
-
-  review: `${BASE_SYSTEM}
-
-MODE: CODE REVIEW
-Analyze the code and suggest improvements.
-- Provide refactored code with \`\`\`edit:path
-- Explain each improvement.`,
-
-  explain: `${BASE_SYSTEM}
-
-MODE: EXPLANATION
-Explain concepts without providing code unless asked.
-- Use examples from the project if available.`,
-
-  design: `${BASE_SYSTEM}
-
-MODE: ARCHITECTURE DESIGN
-Design systems and provide code examples.
-- Provide complete files with \`\`\`edit:path`,
-
-  wireframe: `${BASE_SYSTEM}
-
-MODE: WIREFRAME
-Create ASCII wireframes and provide HTML/CSS code.
-- Use \`\`\`wireframe:Title for the mockup
-- Provide the actual code with \`\`\`edit:path`,
-
-  error: `${BASE_SYSTEM}
-
-MODE: ERROR RESPONSE
-Diagnose errors and provide a fix.
-- Provide the complete fixed file with \`\`\`edit:path`,
-
-  generic: BASE_SYSTEM,
-};
-
-// ─── GEMINI SYSTEM PROMPT ──────────────────────────────────────────
-
-const GEMINI_SYSTEM = CRITICAL_RULE + `You are a code generator. Provide complete code with \`\`\`edit:path\`\`\` blocks. Never claim you created a file. Always tell the user to copy or apply the code.`;
-
-// ─── MODE DETECTION ─────────────────────────────────────────────────
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
 
 function detectMode(userMessage, context = {}) {
   const msg = userMessage.toLowerCase().trim();
@@ -225,9 +113,12 @@ function detectMode(userMessage, context = {}) {
     /good morning/, /good afternoon/, /good evening/,
     /what's up/, /how's it going/,
     /^(yes|no|maybe|ok|sure|great|cool|nice)\b/,
+    /^[a-z]+$/,                          // single word like "hello", "hi"
+    /^\s*$/,                             // empty
   ];
   if (generalPatterns.some(p => p.test(msg))) return 'general';
 
+  // If there are errors, prioritize error mode
   if (context.consoleErrors?.length || context.buildErrors?.length) return 'error';
   if (msg.includes('review') || msg.includes('check this code')) return 'review';
   if (msg.includes('explain') || msg.includes('how does') || msg.includes('what is')) return 'explain';
@@ -237,9 +128,6 @@ function detectMode(userMessage, context = {}) {
   return 'generic';
 }
 
-<<<<<<< HEAD
-// ─── SMART FILE SELECTION ──────────────────────────────────────────
-=======
 // ─── MOCK AI RESPONSES ──────────────────────────────────────────────
 
 const MOCK_RESPONSES = [
@@ -248,18 +136,29 @@ const MOCK_RESPONSES = [
     response: `Hello! 👋 I'm your AI coding assistant. I can help you write code, fix bugs, and explain concepts. Tell me what you need and I'll provide the code in an \`edit:\` block – you can copy it or apply it with the "Apply" button.`,
   },
   {
-    triggers: ['create', 'make', 'build', 'add'],
-    response: `I'll generate the code you need. Please tell me the file path (e.g., \`index.html\`) and what you want it to do. I'll provide the complete code inside an \`edit:\` block. You can then copy and paste it or use the "Apply" button.`,
+    triggers: ['how are you'],
+    response: `I'm doing great, thanks for asking! 😄 How can I help you with your code today?`,
   },
   {
-    triggers: ['fix', 'bug', 'error', 'broken'],
-    response: `I'll help you fix that! Please share the error message and the file path. I'll analyze the problem and provide a complete fixed file with an \`edit:\` block.`,
+    triggers: ['what can you do'],
+    response: `I can help you write code, debug issues, review your code, explain concepts, and even create wireframes! 🚀`,
+  },
+  {
+    triggers: ['who are you'],
+    response: `I'm your AI coding assistant, built to help you with your software development projects! 💻`,
+  },
+  {
+    triggers: ['2 + 2', '2 plus 2'],
+    response: `2 + 2 = 4 🧮`,
+  },
+  {
+    triggers: ['thanks', 'thank you'],
+    response: `You're welcome! 😊 Let me know if you need anything else!`,
   },
 ];
 
 function generateMockResponse(message, projectFiles) {
   const msgLower = message.toLowerCase();
-  
   for (const mock of MOCK_RESPONSES) {
     if (mock.triggers.some(t => msgLower.includes(t))) {
       return {
@@ -269,19 +168,16 @@ function generateMockResponse(message, projectFiles) {
       };
     }
   }
-
   const fileCount = Object.keys(projectFiles).length;
-  const fileList = Object.keys(projectFiles).slice(0, 5).join(', ');
-  
+  const fileList = Object.keys(projectFiles).slice(0, 3).join(', ');
   return {
-    content: `I can help you with your project (${fileCount} files${fileList ? ` including ${fileList}` : ''}). Tell me what code you need or what problem you're facing, and I'll provide the solution with an \`edit:\` block for you to apply.`,
+    content: `I can help you with your project (${fileCount} files${fileList ? ` including ${fileList}` : ''}). Tell me what code you need or what problem you're facing.`,
     model: 'mock-ai',
     provider: 'mock',
   };
 }
 
 // ─── SMART FILE SELECTION ─────────────────────────────────────────
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
 
 export function selectRelevantFiles(projectFiles, userMessage, activeFile = null, recentFiles = []) {
   const entries = Object.entries(projectFiles);
@@ -584,7 +480,7 @@ async function callOpenRouter(messages, preferredModel = null) {
       console.log('[AI Service] 🎭 Mock mode enabled (invalid API key)');
       const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
       return {
-        content: generateMockResponse(userMessage),
+        content: generateMockResponse(userMessage, {}),
         model: 'mock',
         provider: 'mock'
       };
@@ -596,7 +492,7 @@ async function callOpenRouter(messages, preferredModel = null) {
     console.log('[AI Service] 🎭 Mock mode enabled');
     const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
     return {
-      content: generateMockResponse(userMessage),
+      content: generateMockResponse(userMessage, {}),
       model: 'mock',
       provider: 'mock'
     };
@@ -661,9 +557,9 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
     if (MOCK_MODE) {
       console.log('[AI Service] 🎭 Mock streaming mode enabled (invalid API key)');
       const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
-      const mockResponse = generateMockResponse(userMessage);
+      const mockResponse = generateMockResponse(userMessage, {});
       
-      const chunks = mockResponse.split(' ');
+      const chunks = mockResponse.content.split(' ');
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
         onChunk(chunk);
@@ -671,7 +567,7 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
       }
       
       return {
-        content: mockResponse,
+        content: mockResponse.content,
         model: 'mock',
         provider: 'mock'
       };
@@ -682,9 +578,9 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
   if (MOCK_MODE) {
     console.log('[AI Service] 🎭 Mock streaming mode enabled');
     const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
-    const mockResponse = generateMockResponse(userMessage);
+    const mockResponse = generateMockResponse(userMessage, {});
     
-    const chunks = mockResponse.split(' ');
+    const chunks = mockResponse.content.split(' ');
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
       onChunk(chunk);
@@ -692,7 +588,7 @@ async function streamOpenRouter(messages, onChunk, preferredModel = null) {
     }
     
     return {
-      content: mockResponse,
+      content: mockResponse.content,
       model: 'mock',
       provider: 'mock'
     };
@@ -805,7 +701,7 @@ async function callGroq(messages, model = 'meta-llama/llama-4-scout-17b-16e-inst
       console.log('[AI Service] 🎭 Mock mode enabled (invalid GROQ key)');
       const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
       return {
-        content: generateMockResponse(userMessage),
+        content: generateMockResponse(userMessage, {}),
         model: 'mock',
         provider: 'mock'
       };
@@ -838,9 +734,9 @@ async function streamGroq(messages, onChunk) {
     if (MOCK_MODE) {
       console.log('[AI Service] 🎭 Mock streaming mode enabled (invalid GROQ key)');
       const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
-      const mockResponse = generateMockResponse(userMessage);
+      const mockResponse = generateMockResponse(userMessage, {});
       
-      const chunks = mockResponse.split(' ');
+      const chunks = mockResponse.content.split(' ');
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
         onChunk(chunk);
@@ -848,7 +744,7 @@ async function streamGroq(messages, onChunk) {
       }
       
       return {
-        content: mockResponse,
+        content: mockResponse.content,
         model: 'mock',
         provider: 'mock'
       };
@@ -901,8 +797,7 @@ async function streamGroq(messages, onChunk) {
   return { content: cleanResponse(fullText), model: 'meta-llama/llama-4-scout-17b-16e-instruct', provider: 'groq' };
 }
 
-<<<<<<< HEAD
-// ─── GEMINI (Conditional) ─────────────────────────────────────────
+// ─── GEMINI ─────────────────────────────────────────────────────────
 
 const GEMINI_SYSTEM = `You are a code editor AI. You MUST follow these rules EXACTLY:
 
@@ -930,9 +825,6 @@ body { margin: 0; }
 RULE 6: The edit block must contain the COMPLETE file content, not just changes.
 
 RULE 7: After giving code, say: **File Completed:** filename`;
-=======
-// ─── GEMINI ─────────────────────────────────────────────────────────
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
 
 async function callGemini(messages, model = 'gemini-2.5-flash') {
   if (!geminiClient) {
@@ -940,7 +832,7 @@ async function callGemini(messages, model = 'gemini-2.5-flash') {
       console.log('[AI Service] 🎭 Mock mode enabled (Gemini not available)');
       const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
       return {
-        content: generateMockResponse(userMessage),
+        content: generateMockResponse(userMessage, {}),
         model: 'mock',
         provider: 'mock'
       };
@@ -971,9 +863,9 @@ async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
     if (MOCK_MODE) {
       console.log('[AI Service] 🎭 Mock streaming mode enabled (Gemini not available)');
       const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
-      const mockResponse = generateMockResponse(userMessage);
+      const mockResponse = generateMockResponse(userMessage, {});
       
-      const chunks = mockResponse.split(' ');
+      const chunks = mockResponse.content.split(' ');
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
         onChunk(chunk);
@@ -981,7 +873,7 @@ async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
       }
       
       return {
-        content: mockResponse,
+        content: mockResponse.content,
         model: 'mock',
         provider: 'mock'
       };
@@ -1015,9 +907,6 @@ async function streamGemini(messages, onChunk, model = 'gemini-2.5-flash') {
   return { content: cleanResponse(fullText), model, provider: 'gemini' };
 }
 
-<<<<<<< HEAD
-// ─── STREAM WITH FALLBACK ──────────────────────────────────────────
-=======
 // ─── MOCK AI ────────────────────────────────────────────────────────
 
 async function callMockAI(messages, projectFiles = {}) {
@@ -1041,12 +930,10 @@ async function streamMockAI(messages, onChunk, projectFiles = {}) {
 // ─── STREAM WITH FALLBACK ──────────────────────────────────────────
 
 export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null, projectFiles = {}) {
-  if (MOCK_AI) {
+  if (MOCK_MODE) {
     return await streamMockAI(messages, onChunk, projectFiles);
   }
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
 
-export async function streamWithFallback(messages, onChunk, preferredProvider = 'openrouter', preferredModel = null) {
   const providers = [];
   
   const hasValidOpenRouter = OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'sk' && OPENROUTER_API_KEY.length > 10;
@@ -1065,9 +952,9 @@ export async function streamWithFallback(messages, onChunk, preferredProvider = 
     if (MOCK_MODE) {
       console.log('[AI Service] 🎭 Mock mode enabled (no valid providers)');
       const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
-      const mockResponse = generateMockResponse(userMessage);
+      const mockResponse = generateMockResponse(userMessage, projectFiles);
       
-      const chunks = mockResponse.split(' ');
+      const chunks = mockResponse.content.split(' ');
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i] + (i < chunks.length - 1 ? ' ' : '');
         onChunk(chunk);
@@ -1075,7 +962,7 @@ export async function streamWithFallback(messages, onChunk, preferredProvider = 
       }
       
       return {
-        content: mockResponse,
+        content: mockResponse.content,
         model: 'mock',
         provider: 'mock'
       };
@@ -1100,16 +987,12 @@ export async function streamWithFallback(messages, onChunk, preferredProvider = 
 }
 
 // ─── CALL WITH FALLBACK ────────────────────────────────────────────
-<<<<<<< HEAD
-=======
 
 export async function callWithFallback(messages, preferredProvider = 'openrouter', preferredModel = null, projectFiles = {}) {
-  if (MOCK_AI) {
+  if (MOCK_MODE) {
     return await callMockAI(messages, projectFiles);
   }
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
 
-export async function callWithFallback(messages, preferredProvider = 'openrouter', preferredModel = null) {
   const providers = [];
   
   const hasValidOpenRouter = OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'sk' && OPENROUTER_API_KEY.length > 10;
@@ -1129,7 +1012,7 @@ export async function callWithFallback(messages, preferredProvider = 'openrouter
       console.log('[AI Service] 🎭 Mock mode enabled (no valid providers)');
       const userMessage = messages.find(m => m.role === 'user')?.content || 'Hello';
       return {
-        content: generateMockResponse(userMessage),
+        content: generateMockResponse(userMessage, projectFiles),
         model: 'mock',
         provider: 'mock'
       };
@@ -1149,33 +1032,6 @@ export async function callWithFallback(messages, preferredProvider = 'openrouter
   }
 
   throw lastError || new Error('All AI providers failed');
-}
-
-// ─── MOCK RESPONSES ─────────────────────────────────────────────────
-
-function generateMockResponse(userMessage) {
-  const lower = userMessage.toLowerCase();
-  
-  if (lower.includes('hello') || lower.includes('hi') || lower === 'hey') {
-    return "Hey there! 👋 What would you like to work on today? I'm here to help with your code!";
-  }
-  if (lower.includes('2 + 2') || lower.includes('2 plus 2') || lower.includes('what is 2+2')) {
-    return "2 + 2 = 4 🧮";
-  }
-  if (lower.includes('thank you') || lower.includes('thanks')) {
-    return "You're welcome! 😊 Let me know if you need anything else!";
-  }
-  if (lower.includes('how are you')) {
-    return "I'm doing great, thanks for asking! 😄 How can I help you with your code today?";
-  }
-  if (lower.includes('what can you do')) {
-    return "I can help you write code, debug issues, review your code, explain concepts, and even create wireframes! 🚀";
-  }
-  if (lower.includes('who are you')) {
-    return "I'm your AI coding assistant, built to help you with your software development projects! 💻";
-  }
-  
-  return `I received your message: "${userMessage}". I'm here to help with any coding questions you have! What would you like to work on?`;
 }
 
 // ─── RESPONSE CLEANING & PARSING ────────────────────────────────────
@@ -1198,29 +1054,14 @@ export function parseAiResponse(response) {
 
   const cleaned = typeof response === 'string' ? cleanResponse(response) : cleanResponse(response.content || '');
 
-<<<<<<< HEAD
-  const editPatterns = [
-    /```edit:([^\n]+)\n([\s\S]*?)```/g,
-    /```\s*edit:([^\n]+)\n([\s\S]*?)```/g,
-    /```file:([^\n]+)\n([\s\S]*?)```/g,
-    /```\s*([^\n]+\.(?:html|css|js|ts|tsx|jsx))\n([\s\S]*?)```/g,
-  ];
-
-=======
   const editPattern = /```edit:([^\n]+)\n([\s\S]*?)```/g;
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
   const edits = [];
-  for (const pattern of editPatterns) {
-    let match;
-    while ((match = pattern.exec(cleaned)) !== null) {
-      const existing = edits.find(e => e.filename === match[1].trim() && e.code === match[2].trim());
-      if (!existing) edits.push({ filename: match[1].trim(), code: match[2].trim() });
-    }
+  let match;
+  while ((match = editPattern.exec(cleaned)) !== null) {
+    const existing = edits.find(e => e.filename === match[1].trim() && e.code === match[2].trim());
+    if (!existing) edits.push({ filename: match[1].trim(), code: match[2].trim() });
   }
 
-<<<<<<< HEAD
-  if (edits.length === 0) {
-=======
   const patchPattern = /```patch:([^\n]+)\n([\s\S]*?)```/g;
   const patches = [];
   while ((match = patchPattern.exec(cleaned)) !== null) {
@@ -1234,7 +1075,6 @@ export function parseAiResponse(response) {
   }
 
   if (edits.length === 0 && patches.length === 0) {
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
     const codeBlockRegex = /```(?:html|css|js|ts|tsx|jsx|javascript|typescript)\n([\s\S]*?)```/g;
     let match;
     while ((match = codeBlockRegex.exec(cleaned)) !== null) {
@@ -1247,7 +1087,10 @@ export function parseAiResponse(response) {
   const completedMatch = cleaned.match(fileCompletedRegex);
 
   let message = cleaned;
-  for (const pattern of editPatterns) message = message.replace(pattern, '');
+  const allPatterns = [editPattern, patchPattern, wireframePattern, /```(?:html|css|js|ts|tsx|jsx|javascript|typescript)\n([\s\S]*?)```/g];
+  for (const pattern of allPatterns) {
+    message = message.replace(pattern, '');
+  }
   message = message.replace(/\*\*File Completed:[^\n]*\*\*/gi, '').replace(/\n{3,}/g, '\n\n').trim();
 
   let detectedMode = 'generic';
@@ -1256,7 +1099,7 @@ export function parseAiResponse(response) {
   else if (message.includes('EXPLANATION:')) detectedMode = 'explain';
   else if (edits.length > 0) detectedMode = 'code';
 
-  return { message, edits, mode: detectedMode, completedFile: completedMatch?.[1]?.trim() };
+  return { message, edits, patches, wireframes, mode: detectedMode, completedFile: completedMatch?.[1]?.trim() };
 }
 
 function guessFilenameFromContext(text, code) {
@@ -1269,11 +1112,6 @@ function guessFilenameFromContext(text, code) {
   return null;
 }
 
-<<<<<<< HEAD
-// ─── SMART EDIT APPLICATION ────────────────────────────────────────
-
-export function applyEdits(projectFiles, edits, options = {}) {
-=======
 // ─── UNIFIED DIFF PATCH APPLICATION ─────────────────────────────────
 
 function applyPatch(originalContent, diffText) {
@@ -1331,8 +1169,7 @@ function applyPatch(originalContent, diffText) {
 
 // ─── SMART EDIT APPLICATION ────────────────────────────────────────
 
-export function applyEdits(projectFiles, edits, patches, options = {}) {
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
+export function applyEdits(projectFiles, edits, patches = [], options = {}) {
   const { activeFile = null, strategy = 'smart' } = options;
   const updatedFiles = { ...projectFiles };
   const applied = [];
@@ -1367,8 +1204,6 @@ export function applyEdits(projectFiles, edits, patches, options = {}) {
     }
   }
 
-<<<<<<< HEAD
-=======
   for (const patch of patches) {
     const { filename, diff } = patch;
     
@@ -1392,7 +1227,6 @@ export function applyEdits(projectFiles, edits, patches, options = {}) {
     }
   }
 
->>>>>>> 35818ae530b6629ab88c6606c4b9cba49f07f6a1
   return { updatedFiles, applied, failed };
 }
 

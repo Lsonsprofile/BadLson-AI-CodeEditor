@@ -10,7 +10,15 @@ export default function LivePreview() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [scale, setScale] = useState(1);
   const [iframeContent, setIframeContent] = useState('');
-  const { files, previewDevice, activeFile } = useWorkspaceStore();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const { files, previewDevice, activeFile, setPreviewDevice } = useWorkspaceStore();
+
+  // Track fullscreen state for the icon
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
 
   const normalizeFilePath = (path: string) => path.replace(/\\+/g, '/').replace(/\/\/+/g, '/').replace(/^\//, '');
   const getFolderPath = (path: string) => {
@@ -96,25 +104,45 @@ export default function LivePreview() {
     const resolved = resolveRelativePath(relativePath, baseFolder) || normalizeFilePath(relativePath);
     if (!resolved) return null;
 
-    const type = getContentType(resolved);
-    if (type.startsWith('image/') || type.startsWith('font/') || type.startsWith('audio/') || type.startsWith('video/')) {
+    const typeFromExtension = getContentType(resolved);   // e.g. "image/svg+xml" for .svg
+
+    // ── 1. Try blob store first ────────────────────────────
+    if (typeFromExtension.startsWith('image/') || 
+        typeFromExtension.startsWith('font/') || 
+        typeFromExtension.startsWith('audio/') || 
+        typeFromExtension.startsWith('video/')) {
       const blob = await getBlob(resolved);
       if (blob) {
-        return URL.createObjectURL(blob);
+        // Force the MIME to match the file extension
+        const typedBlob = new Blob([blob], { type: typeFromExtension });
+        return URL.createObjectURL(typedBlob);
       }
     }
 
+    // ── 2. Fall back to string content (data URL or text) ──
     const fileContent = files[resolved] as string | undefined;
-    if (typeof fileContent === 'string') {
-      return createDataUrl(resolved, fileContent) || null;
+    const dbContent = fileContent !== undefined ? fileContent : await getContent(resolved);
+    if (!dbContent) return null;
+
+    // If it's a data URL, strip its internal MIME and re‑type it
+    if (dbContent.startsWith('data:')) {
+      // Extract base64 part
+      const parts = dbContent.split(',');
+      if (parts.length < 2) return dbContent;          // invalid data URL, keep as-is
+
+      const base64 = parts[1];
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const newBlob = new Blob([bytes], { type: typeFromExtension });
+      return URL.createObjectURL(newBlob);
     }
 
-    const dbContent = await getContent(resolved);
-    if (dbContent !== null) {
-      return createDataUrl(resolved, dbContent) || null;
-    }
-
-    return null;
+    // Plain text (CSS, JS, etc.) – create a data URL with the correct type
+    return createDataUrl(resolved, dbContent) || null;
   };
 
   const rewriteCssAssetUrls = async (css: string, cssFolder: string): Promise<string> => {
@@ -430,9 +458,10 @@ export default function LivePreview() {
   const device = getDeviceConfig();
   const isSimulated = previewDevice !== 'desktop';
 
-  // ─── FIXED HANDLERS ──────────────────────────────────────────────
+  // ─── HANDLERS ────────────────────────────────────────────────────
 
   const handleRefresh = async () => {
+    console.log('🔄 Refresh clicked');
     setIsRefreshing(true);
     try {
       const html = await generatePreview();
@@ -453,10 +482,8 @@ export default function LivePreview() {
       const newWindow = window.open('', '_blank');
       if (newWindow) {
         newWindow.location.href = url;
-        // Revoke after a minute to allow the new tab to load
         setTimeout(() => URL.revokeObjectURL(url), 60000);
       } else {
-        // Fallback to download if popup blocked
         const a = document.createElement('a');
         a.href = url;
         a.download = 'preview.html';
@@ -490,10 +517,44 @@ export default function LivePreview() {
         <div className="flex items-center gap-2">
           <Globe className="w-3.5 h-3.5 text-slate-400" />
           <span className="text-[11px] font-semibold text-[#c9d1d9]">Preview</span>
-          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#1a2035] text-[9px] text-[#8b949e]">
-            {device.icon}
-            {device.label}
-          </span>
+          
+          {/* Device Switcher Buttons */}
+          <div className="flex items-center gap-0.5 ml-1">
+            <button
+              onClick={() => setPreviewDevice('mobile')}
+              className={`p-1 rounded transition ${
+                previewDevice === 'mobile'
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-white hover:bg-[#30363d]'
+              }`}
+              title="Mobile view"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setPreviewDevice('tablet')}
+              className={`p-1 rounded transition ${
+                previewDevice === 'tablet'
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-white hover:bg-[#30363d]'
+              }`}
+              title="Tablet view"
+            >
+              <Tablet className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setPreviewDevice('desktop')}
+              className={`p-1 rounded transition ${
+                previewDevice === 'desktop'
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-white hover:bg-[#30363d]'
+              }`}
+              title="Desktop view"
+            >
+              <Monitor className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
           {isSimulated && (
             <span className="text-[9px] text-slate-500">
               {Math.round(scale * 100)}%
@@ -525,9 +586,9 @@ export default function LivePreview() {
           <button 
             onClick={handleFullscreen} 
             className="p-1 text-slate-400 hover:text-white rounded hover:bg-[#30363d] transition" 
-            title={document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen'}
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
           >
-            {document.fullscreenElement ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>

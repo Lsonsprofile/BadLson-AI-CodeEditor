@@ -1,3 +1,4 @@
+// src/components/Explorer/FileExplorer.tsx
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
 import {
   Folder,
@@ -23,6 +24,9 @@ import {
   FilePlus,
   Upload,
   FileArchive,
+  Copy,
+  ClipboardPaste,
+  Download,
 } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import {
@@ -34,8 +38,9 @@ import {
   saveContent,
   saveBlob,
 } from '../../lib/fileStorage';
+import JSZip from 'jszip';
 
-// Type declaration for non-standard input attributes
+// Type declaration for non‑standard input attributes
 declare module 'react' {
   interface InputHTMLAttributes<T> extends HTMLAttributes<T> {
     webkitdirectory?: string;
@@ -54,12 +59,11 @@ interface TreeNode {
 }
 
 // ────────────────────────────────────────────────────────────────
-// FIX #4: O(n²) → O(n) by using Sets for path lookups
+// Build folder tree – determine fileType from extension
 // ────────────────────────────────────────────────────────────────
 function buildFolderTree(
   filePaths: string[],
-  folderPaths: string[],
-  fileMeta: Record<string, { type?: 'text' | 'image' | 'binary' }>
+  folderPaths: string[]
 ): TreeNode[] {
   if (filePaths.length === 0 && folderPaths.length === 0) return [];
 
@@ -70,6 +74,13 @@ function buildFolderTree(
   const folderSet = new Set(folderPaths);
   const fileSet = new Set(filePaths);
   const allPaths = [...folderPaths, ...filePaths];
+
+  const getFileTypeFromExt = (name: string): 'text' | 'image' | 'binary' => {
+    const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext))
+      return 'image';
+    return 'text';
+  };
 
   for (const fullPath of allPaths) {
     if (seen.has(fullPath)) continue;
@@ -93,7 +104,7 @@ function buildFolderTree(
           children: [],
           childCount: 0,
           depth: i,
-          fileType: fileMeta[fullPath]?.type || 'text',
+          fileType: getFileTypeFromExt(part),
         });
       } else {
         let folder = folderMap.get(builtPath);
@@ -140,33 +151,43 @@ function buildFolderTree(
   return root;
 }
 
-function getFileIcon(name: string, fileType?: string) {
-  if (fileType === 'image') return <Image className="w-3.5 h-3.5 text-[#d2a8ff] shrink-0" />;
+// ────────────────────────────────────────────────────────────────
+// File icon based on extension
+// ────────────────────────────────────────────────────────────────
+function getFileIcon(name: string) {
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
-  switch (ext) {
-    case 'html':
-    case 'htm': return <Layout className="w-3.5 h-3.5 text-[#ff7b72] shrink-0" />;
-    case 'css': return <Type className="w-3.5 h-3.5 text-[#79c0ff] shrink-0" />;
-    case 'js':
-    case 'mjs':
-    case 'cjs': return <Braces className="w-3.5 h-3.5 text-[#d2a8ff] shrink-0" />;
-    case 'ts':
-    case 'tsx': return <FileCode className="w-3.5 h-3.5 text-[#58a6ff] shrink-0" />;
-    case 'json': return <FileCode className="w-3.5 h-3.5 text-[#7ee787] shrink-0" />;
-    default: return <FileText className="w-3.5 h-3.5 text-[#8b949e] shrink-0" />;
-  }
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'svg'].includes(ext))
+    return <Image className="w-3.5 h-3.5 text-[#d2a8ff] shrink-0" />;
+  if (ext === 'html' || ext === 'htm')
+    return <Layout className="w-3.5 h-3.5 text-[#ff7b72] shrink-0" />;
+  if (ext === 'css')
+    return <Type className="w-3.5 h-3.5 text-[#79c0ff] shrink-0" />;
+  if (ext === 'js' || ext === 'mjs' || ext === 'cjs')
+    return <Braces className="w-3.5 h-3.5 text-[#d2a8ff] shrink-0" />;
+  if (ext === 'ts' || ext === 'tsx')
+    return <FileCode className="w-3.5 h-3.5 text-[#58a6ff] shrink-0" />;
+  if (ext === 'json')
+    return <FileCode className="w-3.5 h-3.5 text-[#7ee787] shrink-0" />;
+  return <FileText className="w-3.5 h-3.5 text-[#8b949e] shrink-0" />;
 }
 
 // ────────────────────────────────────────────────────────────────
-// SCROLL PERF: Iterative flatten instead of recursive
+// Scroll helpers
 // ────────────────────────────────────────────────────────────────
-function getVisibleNodesIterative(nodes: TreeNode[], openFolders: Set<string>): TreeNode[] {
+function getVisibleNodesIterative(
+  nodes: TreeNode[],
+  openFolders: Set<string>
+): TreeNode[] {
   const result: TreeNode[] = [];
   const stack: TreeNode[] = [...nodes].reverse();
   while (stack.length > 0) {
     const node = stack.pop()!;
     result.push(node);
-    if (node.type === 'folder' && openFolders.has(node.name) && node.children.length > 0) {
+    if (
+      node.type === 'folder' &&
+      openFolders.has(node.name) &&
+      node.children.length > 0
+    ) {
       for (let i = node.children.length - 1; i >= 0; i--) {
         stack.push(node.children[i]);
       }
@@ -175,9 +196,6 @@ function getVisibleNodesIterative(nodes: TreeNode[], openFolders: Set<string>): 
   return result;
 }
 
-// ────────────────────────────────────────────────────────────────
-// FIX #11: Build a Map<folderPath, filePath[]> for O(1) lookups
-// ────────────────────────────────────────────────────────────────
 function buildFolderFileMap(filePaths: string[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const path of filePaths) {
@@ -194,96 +212,156 @@ function buildFolderFileMap(filePaths: string[]): Map<string, string[]> {
 }
 
 // ────────────────────────────────────────────────────────────────
-// SCROLL PERF: Memoized TreeItem — only re-renders when props change
+// Memoized TreeItem
 // ────────────────────────────────────────────────────────────────
-const TreeItem = memo(({
-  node,
-  isActive,
-  isOpen,
-  isSelected,
-  onToggle,
-  onSelect,
-  onDelete,
-  onContextMenu,
-  onToggleSelect,
-  style,
-}: {
-  node: TreeNode;
-  isActive: boolean;
-  isOpen: boolean;
-  isSelected: boolean;
-  onToggle: (path: string) => void;
-  onSelect: (path: string) => void;
-  onDelete: (node: TreeNode) => void;
-  onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
-  onToggleSelect: (name: string) => void;
-  style: React.CSSProperties;
-}) => {
-  const isFolder = node.type === 'folder';
-  const paddingLeft = node.depth * 14 + (isFolder ? 6 : 22);
+const TreeItem = memo(
+  ({
+    node,
+    isActive,
+    isOpen,
+    isSelected,
+    onToggle,
+    onSelect,
+    onDelete,
+    onContextMenu,
+    onToggleSelect,
+    style,
+  }: {
+    node: TreeNode;
+    isActive: boolean;
+    isOpen: boolean;
+    isSelected: boolean;
+    onToggle: (path: string) => void;
+    onSelect: (path: string) => void;
+    onDelete: (node: TreeNode) => void;
+    onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
+    onToggleSelect: (name: string) => void;
+    style: React.CSSProperties;
+  }) => {
+    const isFolder = node.type === 'folder';
+    const paddingLeft = node.depth * 14 + (isFolder ? 6 : 22);
 
-  const handleToggle = useCallback(() => onToggle(node.name), [onToggle, node.name]);
-  const handleSelect = useCallback(() => onSelect(node.name), [onSelect, node.name]);
-  const handleDelete = useCallback((e: React.MouseEvent) => { e.stopPropagation(); onDelete(node); }, [onDelete, node]);
-  const handleContextMenu = useCallback((e: React.MouseEvent) => onContextMenu(e, node), [onContextMenu, node]);
-  const handleToggleSelect = useCallback((e: React.MouseEvent) => { e.stopPropagation(); onToggleSelect(node.name); }, [onToggleSelect, node.name]);
+    const handleToggle = useCallback(
+      () => onToggle(node.name),
+      [onToggle, node.name]
+    );
+    const handleSelect = useCallback(
+      () => onSelect(node.name),
+      [onSelect, node.name]
+    );
+    const handleDelete = useCallback(
+      (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onDelete(node);
+      },
+      [onDelete, node]
+    );
+    const handleContextMenu = useCallback(
+      (e: React.MouseEvent) => onContextMenu(e, node),
+      [onContextMenu, node]
+    );
+    const handleToggleSelect = useCallback(
+      (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onToggleSelect(node.name);
+      },
+      [onToggleSelect, node.name]
+    );
 
-  return (
-    <div style={{ ...style, paddingLeft }} className="absolute left-0 right-0 will-change-transform">
-      {isFolder ? (
-        <div
-          onContextMenu={handleContextMenu}
-          className="group flex items-center gap-1.5 w-full px-2 py-0.5 text-[11px] rounded-sm transition-colors cursor-pointer select-none text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]"
-        >
-          <button onClick={handleToggleSelect} className="shrink-0 text-[#8b949e] hover:text-[#c9d1d9]">
-            {isSelected ? <CheckSquare className="w-3 h-3 text-[#58a6ff]" /> : <Square className="w-3 h-3" />}
-          </button>
+    return (
+      <div
+        style={{ ...style, paddingLeft }}
+        className="absolute left-0 right-0 will-change-transform"
+      >
+        {isFolder ? (
+          <div
+            onContextMenu={handleContextMenu}
+            className="group flex items-center gap-1.5 w-full px-2 py-0.5 text-[11px] rounded-sm transition-colors cursor-pointer select-none text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]"
+          >
+            <button
+              onClick={handleToggleSelect}
+              className="shrink-0 text-[#8b949e] hover:text-[#c9d1d9]"
+            >
+              {isSelected ? (
+                <CheckSquare className="w-3 h-3 text-[#58a6ff]" />
+              ) : (
+                <Square className="w-3 h-3" />
+              )}
+            </button>
 
-          <button onClick={handleToggle} className="shrink-0">
-            {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          </button>
+            <button onClick={handleToggle} className="shrink-0">
+              {isOpen ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronRight className="w-3 h-3" />
+              )}
+            </button>
 
-          <button onClick={handleToggle} className="shrink-0">
-            {isOpen
-              ? <FolderOpen className="w-3.5 h-3.5 text-[#e3b341]" />
-              : <Folder className="w-3.5 h-3.5 text-[#e3b341]" />
-            }
-          </button>
+            <button onClick={handleToggle} className="shrink-0">
+              {isOpen ? (
+                <FolderOpen className="w-3.5 h-3.5 text-[#e3b341]" />
+              ) : (
+                <Folder className="w-3.5 h-3.5 text-[#e3b341]" />
+              )}
+            </button>
 
-          <span onClick={handleToggle} className="truncate font-medium flex-1">{node.displayName}</span>
-          <span className="text-[9px] text-[#484f58] shrink-0">{node.childCount} items</span>
+            <span
+              onClick={handleToggle}
+              className="truncate font-medium flex-1"
+            >
+              {node.displayName}
+            </span>
+            <span className="text-[9px] text-[#484f58] shrink-0">
+              {node.childCount} items
+            </span>
 
-          <button onClick={handleDelete} className="shrink-0 p-0.5 hover:bg-[#30363d] rounded opacity-0 group-hover:opacity-100 transition text-[#f85149]">
-            <Trash2 className="w-3 h-3" />
-          </button>
-        </div>
-      ) : (
-        <div
-          onContextMenu={handleContextMenu}
-          className={`group flex items-center gap-1.5 w-full px-2 py-0.5 text-[11px] rounded-sm transition-colors cursor-pointer select-none ${
-            isActive
-              ? 'bg-[#1f6feb]/20 text-[#58a6ff]'
-              : 'text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]'
-          }`}
-        >
-          <button onClick={handleToggleSelect} className="shrink-0">
-            {isSelected ? <CheckSquare className="w-3 h-3 text-[#58a6ff]" /> : <Square className="w-3 h-3" />}
-          </button>
+            <button
+              onClick={handleDelete}
+              className="shrink-0 p-0.5 hover:bg-[#30363d] rounded opacity-0 group-hover:opacity-100 transition text-[#f85149]"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
+        ) : (
+          <div
+            onContextMenu={handleContextMenu}
+            className={`group flex items-center gap-1.5 w-full px-2 py-0.5 text-[11px] rounded-sm transition-colors cursor-pointer select-none ${
+              isActive
+                ? 'bg-[#1f6feb]/20 text-[#58a6ff]'
+                : 'text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d]'
+            }`}
+          >
+            <button
+              onClick={handleToggleSelect}
+              className="shrink-0"
+            >
+              {isSelected ? (
+                <CheckSquare className="w-3 h-3 text-[#58a6ff]" />
+              ) : (
+                <Square className="w-3 h-3" />
+              )}
+            </button>
 
-          <span onClick={handleSelect} className="shrink-0">
-            {getFileIcon(node.name, node.fileType)}
-          </span>
+            <span onClick={handleSelect} className="shrink-0">
+              {getFileIcon(node.name)}
+            </span>
 
-          <span onClick={handleSelect} className="truncate flex-1">{node.displayName}</span>
+            <span onClick={handleSelect} className="truncate flex-1">
+              {node.displayName}
+            </span>
 
-          <button onClick={handleDelete} className="shrink-0 p-0.5 hover:bg-[#30363d] rounded opacity-0 group-hover:opacity-100 transition text-[#f85149]">
-            <Trash2 className="w-3 h-3" />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-});
+            <button
+              onClick={handleDelete}
+              className="shrink-0 p-0.5 hover:bg-[#30363d] rounded opacity-0 group-hover:opacity-100 transition text-[#f85149]"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
 
 TreeItem.displayName = 'TreeItem';
 
@@ -296,9 +374,26 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced;
 }
 
+// ────────────────────────────────────────────────────────────────
+// Main FileExplorer component
+// ────────────────────────────────────────────────────────────────
 export default function FileExplorer() {
-  const { files, folders, activeFile, openFile, closeFile, createFolder, deleteFolder, updateFile, deleteFile } = useWorkspaceStore();
+  const {
+    files,
+    folders,
+    activeFile,
+    openFile,
+    closeFile,
+    createFolder,
+    deleteFolder,
+    updateFile,
+    deleteFile,
+  } = useWorkspaceStore();
 
+  // ── Clipboard state ───────────────────────────────────────────
+  const [clipboard, setClipboard] = useState<string[]>([]);
+
+  // ── UI states ─────────────────────────────────────────────────
   const [newFileName, setNewFileName] = useState('');
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFileTargetFolder, setNewFileTargetFolder] = useState<string | null>(null);
@@ -316,48 +411,31 @@ export default function FileExplorer() {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
 
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: TreeNode | null }>({ x: 0, y: 0, node: null });
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    node: TreeNode | null;
+  }>({ x: 0, y: 0, node: null });
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // ────────────────────────────────────────────────────────────────
-  // SCROLL PERF: Use ref + rAF instead of state for scroll position
-  // ────────────────────────────────────────────────────────────────
   const scrollTopRef = useRef(0);
   const [, forceRender] = useState(0);
-
   const containerHeightRef = useRef(600);
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #3: Memoize fileNames to avoid new array every render
-  // ────────────────────────────────────────────────────────────────
+  // ── Derived data ──────────────────────────────────────────────
   const fileNames = useMemo(() => Object.keys(files), [files]);
-
   const debouncedSearch = useDebounce(searchQuery, 150);
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #1: Replace useState + useEffect + startTransition with useMemo
-  // FIX #2: Remove useTransition entirely
-  // ────────────────────────────────────────────────────────────────
-  const folderTree = useMemo(() => {
-    return buildFolderTree(
-      fileNames,
-      folders,
-      files as Record<string, { type?: 'text' | 'image' | 'binary' }>
-    );
-  }, [fileNames, folders, files]);
+  const folderTree = useMemo(
+    () => buildFolderTree(fileNames, folders),
+    [fileNames, folders]
+  );
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #11: O(1) folder→files map for fast deletion lookups
-  // ────────────────────────────────────────────────────────────────
   const folderFileMap = useMemo(() => buildFolderFileMap(fileNames), [fileNames]);
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #12: Search without mutating memoized tree nodes
-  // Create a lightweight mask instead of mutating the tree
-  // ────────────────────────────────────────────────────────────────
   const filteredTree = useMemo(() => {
     if (!debouncedSearch.trim()) return folderTree;
     const q = debouncedSearch.toLowerCase();
@@ -367,7 +445,10 @@ export default function FileExplorer() {
       for (const node of nodes) {
         if (node.type === 'folder') {
           const filteredChildren = filterNodes(node.children);
-          if (filteredChildren.length > 0 || node.displayName.toLowerCase().includes(q)) {
+          if (
+            filteredChildren.length > 0 ||
+            node.displayName.toLowerCase().includes(q)
+          ) {
             result.push({ ...node, children: filteredChildren });
           }
         } else if (node.displayName.toLowerCase().includes(q)) {
@@ -380,20 +461,16 @@ export default function FileExplorer() {
     return filterNodes(folderTree);
   }, [folderTree, debouncedSearch]);
 
-  // ────────────────────────────────────────────────────────────────
-  // SCROLL PERF: Memoize visible nodes so they don't rebuild on scroll
-  // ────────────────────────────────────────────────────────────────
-  const visibleNodes = useMemo(() => {
-    return getVisibleNodesIterative(filteredTree, openFolders);
-  }, [filteredTree, openFolders]);
+  const visibleNodes = useMemo(
+    () => getVisibleNodesIterative(filteredTree, openFolders),
+    [filteredTree, openFolders]
+  );
 
   const ITEM_HEIGHT = 24;
   const OVERSCAN = 5;
   const totalHeight = visibleNodes.length * ITEM_HEIGHT;
 
-  // ────────────────────────────────────────────────────────────────
-  // SCROLL PERF: rAF throttled scroll handler — no React state updates
-  // ────────────────────────────────────────────────────────────────
+  // ── Scroll handling (rAF throttled) ──────────────────────────
   const rafIdRef = useRef<number | null>(null);
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -402,7 +479,7 @@ export default function FileExplorer() {
     if (rafIdRef.current !== null) return;
     rafIdRef.current = requestAnimationFrame(() => {
       rafIdRef.current = null;
-      forceRender(n => n + 1);
+      forceRender((n) => n + 1);
     });
   }, []);
 
@@ -422,7 +499,7 @@ export default function FileExplorer() {
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         containerHeightRef.current = entry.contentRect.height;
-        forceRender(n => n + 1);
+        forceRender((n) => n + 1);
       }
     });
     resizeObserver.observe(container);
@@ -431,30 +508,38 @@ export default function FileExplorer() {
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenu(prev => ({ ...prev, node: null }));
+      if (
+        contextMenuRef.current &&
+        !contextMenuRef.current.contains(e.target as Node)
+      ) {
+        setContextMenu((prev) => ({ ...prev, node: null }));
       }
     };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
-    const toast = document.getElementById('toast');
-    const toastMsg = document.getElementById('toastMsg');
-    if (!toast || !toastMsg) return;
-    toastMsg.textContent = message;
-    toast.classList.remove('opacity-0', 'pointer-events-none');
-    toast.classList.add('opacity-100');
-    toast.style.borderColor = type === 'error' ? '#f85149' : type === 'info' ? '#58a6ff' : '#238636';
-    setTimeout(() => {
-      toast.classList.remove('opacity-100');
-      toast.classList.add('opacity-0', 'pointer-events-none');
-    }, 2500);
-  }, []);
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+      const toast = document.getElementById('toast');
+      const toastMsg = document.getElementById('toastMsg');
+      if (!toast || !toastMsg) return;
+      toastMsg.textContent = message;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      toast.classList.add('opacity-100');
+      toast.style.borderColor =
+        type === 'error' ? '#f85149' : type === 'info' ? '#58a6ff' : '#238636';
+      setTimeout(() => {
+        toast.classList.remove('opacity-100');
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 2500);
+    },
+    []
+  );
 
+  // ── Tree actions ──────────────────────────────────────────────
   const toggleFolder = useCallback((path: string) => {
-    setOpenFolders(prev => {
+    setOpenFolders((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
@@ -462,10 +547,13 @@ export default function FileExplorer() {
     });
   }, []);
 
-  const isFolderOpen = useCallback((path: string) => openFolders.has(path), [openFolders]);
+  const isFolderOpen = useCallback(
+    (path: string) => openFolders.has(path),
+    [openFolders]
+  );
 
   const toggleSelect = useCallback((name: string) => {
-    setSelectedFiles(prev => {
+    setSelectedFiles((prev) => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
@@ -476,7 +564,7 @@ export default function FileExplorer() {
   const selectAll = useCallback(() => {
     const allNames: string[] = [];
     const collect = (nodes: TreeNode[]) => {
-      nodes.forEach(n => {
+      nodes.forEach((n) => {
         if (n.type === 'file') allNames.push(n.name);
         else collect(n.children);
       });
@@ -487,52 +575,72 @@ export default function FileExplorer() {
 
   const clearSelection = useCallback(() => setSelectedFiles(new Set()), []);
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #11: O(1) folder file lookup instead of recursive tree walk
-  // ────────────────────────────────────────────────────────────────
-  const getAllFilesInNode = useCallback((node: TreeNode): string[] => {
-    if (node.type === 'file') return [node.name];
-    const direct = folderFileMap.get(node.name);
-    if (direct) return [...direct];
-    return node.children.flatMap(getAllFilesInNode);
-  }, [folderFileMap]);
+  const getAllFilesInNode = useCallback(
+    (node: TreeNode): string[] => {
+      if (node.type === 'file') return [node.name];
+      const direct = folderFileMap.get(node.name);
+      if (direct) return [...direct];
+      return node.children.flatMap(getAllFilesInNode);
+    },
+    [folderFileMap]
+  );
 
-  const handleDelete = useCallback(async (node: TreeNode) => {
-    if (node.type === 'folder') {
-      const childFiles = getAllFilesInNode(node);
-      const count = childFiles.length;
-      if (!window.confirm(`Delete folder "${node.displayName}" and ${count} file${count > 1 ? 's' : ''}?`)) return;
+  const handleDelete = useCallback(
+    async (node: TreeNode) => {
+      if (node.type === 'folder') {
+        const childFiles = getAllFilesInNode(node);
+        const count = childFiles.length;
+        if (
+          !window.confirm(
+            `Delete folder "${node.displayName}" and ${count} file${count > 1 ? 's' : ''}?`
+          )
+        )
+          return;
 
-      await deleteFolderContents(node.name);
-      deleteFolder(node.name);
-      showToast(`Deleted folder "${node.displayName}"`, 'info');
-    } else {
-      if (!window.confirm(`Delete "${node.displayName}"?`)) return;
-      const meta = (files as Record<string, { type?: string }>)[node.name];
-      if (meta?.type === 'image') {
-        await deleteBlob(node.name);
+        await deleteFolderContents(node.name);
+        deleteFolder(node.name);
+        showToast(`Deleted folder "${node.displayName}"`, 'info');
       } else {
-        await deleteContent(node.name);
+        if (!window.confirm(`Delete "${node.displayName}"?`)) return;
+        const ext = node.name.slice(node.name.lastIndexOf('.') + 1).toLowerCase();
+        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
+        if (isImage) {
+          await deleteBlob(node.name);
+        } else {
+          await deleteContent(node.name);
+        }
+        deleteFile(node.name);
+        closeFile(node.name);
+        showToast(`Deleted "${node.displayName}"`, 'info');
       }
-      deleteFile(node.name);
-      closeFile(node.name);
-      showToast(`Deleted "${node.displayName}"`, 'info');
-    }
-    clearSelection();
-    setContextMenu(prev => ({ ...prev, node: null }));
-  }, [files, closeFile, showToast, clearSelection, getAllFilesInNode, deleteFolder, deleteFile]);
+      clearSelection();
+      setContextMenu((prev) => ({ ...prev, node: null }));
+    },
+    [
+      files,
+      closeFile,
+      showToast,
+      clearSelection,
+      getAllFilesInNode,
+      deleteFolder,
+      deleteFile,
+    ]
+  );
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #8: Parallelize deleteSelected with Promise.all
-  // ────────────────────────────────────────────────────────────────
   const handleDeleteSelected = useCallback(async () => {
     if (selectedFiles.size === 0) return;
-    if (!window.confirm(`Delete ${selectedFiles.size} selected file${selectedFiles.size > 1 ? 's' : ''}?`)) return;
+    if (
+      !window.confirm(
+        `Delete ${selectedFiles.size} selected file${selectedFiles.size > 1 ? 's' : ''}?`
+      )
+    )
+      return;
 
     await Promise.all(
       [...selectedFiles].map(async (path) => {
-        const meta = (files as Record<string, { type?: string }>)[path];
-        if (meta?.type === 'image') {
+        const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
+        if (isImage) {
           await deleteBlob(path);
         } else {
           await deleteContent(path);
@@ -549,13 +657,9 @@ export default function FileExplorer() {
   const handleRename = useCallback((node: TreeNode) => {
     setRenamingFile(node.name);
     setRenameValue(node.name);
-    setContextMenu(prev => ({ ...prev, node: null }));
+    setContextMenu((prev) => ({ ...prev, node: null }));
   }, []);
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #5: Preserve binary blobs on rename using getBlob()
-  // getBlob returns Promise<Blob | null> — proper type, no casting needed
-  // ────────────────────────────────────────────────────────────────
   const handleRenameSubmit = useCallback(async () => {
     if (!renamingFile || !renameValue.trim() || renameValue === renamingFile) {
       setRenamingFile(null);
@@ -563,16 +667,17 @@ export default function FileExplorer() {
       return;
     }
     const newName = renameValue.trim();
-    if (fileNames.some(f => f === newName)) {
+    if (fileNames.some((f) => f === newName)) {
       showToast(`"${newName}" already exists`, 'error');
       setRenamingFile(null);
       setRenameValue('');
       return;
     }
 
-    const meta = (files as Record<string, { type?: string }>)[renamingFile];
+    const ext = renamingFile.slice(renamingFile.lastIndexOf('.') + 1).toLowerCase();
+    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
 
-    if (meta?.type === 'image') {
+    if (isImage) {
       const blob = await getBlob(renamingFile);
       if (blob) {
         await saveBlob(newName, blob);
@@ -581,7 +686,10 @@ export default function FileExplorer() {
       const storedRef = (files as Record<string, string>)[renamingFile] || '';
       updateFile(newName, storedRef);
     } else {
-      const oldContent = (files as Record<string, string>)[renamingFile] || await getContent(renamingFile) || '';
+      const oldContent =
+        (files as Record<string, string>)[renamingFile] ||
+        (await getContent(renamingFile)) ||
+        '';
       updateFile(newName, oldContent);
       await saveContent(newName, oldContent);
       await deleteContent(renamingFile);
@@ -596,18 +704,24 @@ export default function FileExplorer() {
     showToast(`Renamed to "${newName}"`, 'success');
     setRenamingFile(null);
     setRenameValue('');
-  }, [renamingFile, renameValue, files, fileNames, activeFile, updateFile, showToast, deleteFile]);
+  }, [
+    renamingFile,
+    renameValue,
+    files,
+    fileNames,
+    activeFile,
+    updateFile,
+    showToast,
+    deleteFile,
+  ]);
 
   const startCreateFile = useCallback((targetFolder: string | null = null) => {
     setNewFileTargetFolder(targetFolder);
     setShowNewFile(true);
     setShowNewFolder(false);
-    setContextMenu(prev => ({ ...prev, node: null }));
+    setContextMenu((prev) => ({ ...prev, node: null }));
   }, []);
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #6: Persist new file to IndexedDB immediately
-  // ────────────────────────────────────────────────────────────────
   const handleCreateFile = useCallback(async () => {
     if (!newFileName.trim()) return;
 
@@ -631,7 +745,7 @@ export default function FileExplorer() {
 
     const parts = name.split('/');
     let path = '';
-    setOpenFolders(prev => {
+    setOpenFolders((prev) => {
       const next = new Set(prev);
       for (let i = 0; i < parts.length - 1; i++) {
         path = path ? `${path}/${parts[i]}` : parts[i];
@@ -645,16 +759,9 @@ export default function FileExplorer() {
     setNewFolderTarget(targetFolder);
     setShowNewFolder(true);
     setShowNewFile(false);
-    setContextMenu(prev => ({ ...prev, node: null }));
+    setContextMenu((prev) => ({ ...prev, node: null }));
   }, []);
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX #7: Folder creation — persist if storage API available
-  // NOTE: saveFolder() does NOT exist in fileStorage.ts.
-  // Folders are only tracked in Zustand state. To persist them across
-  // refreshes, add a 'folders' objectStore to IndexedDB in fileStorage.ts
-  // and export saveFolder/getFolders/deleteFolder functions.
-  // ────────────────────────────────────────────────────────────────
   const handleCreateFolder = useCallback(async () => {
     if (!newFolderName.trim()) return;
 
@@ -669,7 +776,7 @@ export default function FileExplorer() {
     setNewFolderTarget(null);
     showToast(`Folder "${folderPath}" created`, 'success');
 
-    setOpenFolders(prev => {
+    setOpenFolders((prev) => {
       const next = new Set(prev);
       next.add(folderPath);
       return next;
@@ -686,302 +793,562 @@ export default function FileExplorer() {
     });
   }, []);
 
-  // ─── API BASE URL ──────────────────────────────────────────────────
-  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
-
-  // ─── UPDATED: SMART FOLDER UPLOAD (with concurrency & retry) ─────
-  const handleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (!fileList || fileList.length === 0) return;
-
-    const fileArray = Array.from(fileList);
-    const totalFiles = fileArray.length;
-
-    const DIRECT_LIMIT = 500;
-    const BATCH_SIZE = 500;
-    const CONCURRENCY = 3;
-    const MAX_RETRIES = 3;
-    const useBatch = totalFiles > DIRECT_LIMIT;
-
-    if (totalFiles > 5000) {
-      if (!window.confirm(
-        `You selected ${totalFiles.toLocaleString()} files.\\n\\n` +
-        `This will be uploaded in batches of ${BATCH_SIZE} (${Math.ceil(totalFiles / BATCH_SIZE)} batches) to the server.\\n` +
-        `It may take several minutes. Continue?`
-      )) {
-        e.target.value = '';
-        return;
-      }
+  // ── Copy / Paste / Download ──────────────────────────────────
+  const handleCopy = useCallback(() => {
+    if (contextMenu.node) {
+      setClipboard([...clipboard, contextMenu.node.name]);
+      showToast('Copied to clipboard', 'info');
+      setContextMenu((prev) => ({ ...prev, node: null }));
     }
+  }, [contextMenu.node, clipboard, showToast]);
 
-    setImporting(true);
-    setImportProgress({ current: 0, total: totalFiles });
+  // Unique name generator for paste
+  const getUniquePath = (path: string, existingPaths: Set<string>): string => {
+    const dotIndex = path.lastIndexOf('.');
+    const base = dotIndex > 0 ? path.slice(0, dotIndex) : path;
+    const ext = dotIndex > 0 ? path.slice(dotIndex) : '';
+    let newPath = `${base} (copy)${ext}`;
+    let counter = 1;
+    while (existingPaths.has(newPath) || fileNames.includes(newPath)) {
+      newPath = `${base} (copy ${counter})${ext}`;
+      counter++;
+    }
+    return newPath;
+  };
 
-    try {
-      if (!useBatch) {
-        const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'ico', 'bmp']);
-        const folderPaths = new Set<string>();
-        let savedCount = 0;
-        const BATCH_UPDATE = 50;
-        let batchFiles: Record<string, string> = {};
+  const handlePaste = useCallback(async () => {
+    if (clipboard.length === 0) return;
+    const existingPaths = new Set(fileNames);
+    for (const srcPath of clipboard) {
+      const newPath = getUniquePath(srcPath, existingPaths);
+      existingPaths.add(newPath);
 
-        for (let i = 0; i < fileArray.length; i++) {
-          const file = fileArray[i];
-          const path = (file as any).webkitRelativePath || file.name;
-          const ext = path.split('.').pop()?.toLowerCase() || '';
-          const isImage = imageExts.has(ext);
-
-          const parts = path.split('/');
-          let folderPath = '';
-          for (let j = 0; j < parts.length - 1; j++) {
-            folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
-            folderPaths.add(folderPath);
-          }
-
+      const isFolder = folders.includes(srcPath);
+      if (isFolder) {
+        // Copy folder recursively
+        const childFiles = getAllFilesInNode({
+          name: srcPath,
+          displayName: srcPath.split('/').pop() || srcPath,
+          type: 'folder',
+          children: [],
+          childCount: 0,
+          depth: 0,
+        } as TreeNode);
+        createFolder(newPath);
+        for (const childFile of childFiles) {
+          const relative = childFile.slice(srcPath.length + 1);
+          const newChildPath = `${newPath}/${relative}`;
+          const ext = childFile.slice(childFile.lastIndexOf('.') + 1).toLowerCase();
+          const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
           if (isImage) {
-            await saveBlob(path, file);
-            batchFiles[path] = '';
-          } else {
-            const content = await file.text();
-            await saveContent(path, content);
-            batchFiles[path] = content;
-          }
-
-          savedCount++;
-
-          // FIX #9: Throttle progress updates (every 25 files)
-          if (savedCount % 25 === 0 || savedCount === totalFiles) {
-            setImportProgress({ current: savedCount, total: totalFiles });
-          }
-
-          if (savedCount % BATCH_UPDATE === 0 || savedCount === totalFiles) {
-            const currentFiles = useWorkspaceStore.getState().files;
-            const currentFolders = useWorkspaceStore.getState().folders;
-            const mergedFiles = { ...currentFiles, ...batchFiles };
-            const mergedFolders = [...currentFolders];
-            for (const folder of folderPaths) {
-              if (!mergedFolders.includes(folder)) {
-                mergedFolders.push(folder);
-              }
+            const blob = await getBlob(childFile);
+            if (blob) {
+              await saveBlob(newChildPath, blob);
+              updateFile(newChildPath, '');
             }
-            useWorkspaceStore.setState({
-              files: mergedFiles,
-              folders: mergedFolders,
-            });
-            batchFiles = {};
-            await new Promise(r => setTimeout(r, 0));
+          } else {
+            const content =
+              (files as Record<string, string>)[childFile] ||
+              (await getContent(childFile)) ||
+              '';
+            updateFile(newChildPath, content);
+            await saveContent(newChildPath, content);
           }
         }
+        showToast(`Duplicated folder "${srcPath}" as "${newPath}"`, 'success');
+      } else {
+        const ext = srcPath.slice(srcPath.lastIndexOf('.') + 1).toLowerCase();
+        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
+        if (isImage) {
+          const blob = await getBlob(srcPath);
+          if (blob) {
+            await saveBlob(newPath, blob);
+            updateFile(newPath, '');
+          }
+        } else {
+          const content =
+            (files as Record<string, string>)[srcPath] ||
+            (await getContent(srcPath)) ||
+            '';
+          updateFile(newPath, content);
+          await saveContent(newPath, content);
+        }
+        showToast(`Duplicated "${srcPath}" as "${newPath}"`, 'success');
+      }
+    }
+    setClipboard([]);
+    setContextMenu((prev) => ({ ...prev, node: null }));
+  }, [
+    clipboard,
+    fileNames,
+    folders,
+    files,
+    createFolder,
+    updateFile,
+    getAllFilesInNode,
+    showToast,
+  ]);
 
-        setImportProgress({ current: savedCount, total: totalFiles });
-        showToast(`Successfully uploaded ${savedCount} files`, 'success');
+  const handleDownload = useCallback(
+    async (node: TreeNode) => {
+      if (node.type !== 'file') return;
+      const path = node.name;
+      const ext = path.split('.').pop()?.toLowerCase() || '';
+      const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
+      try {
+        if (isImage) {
+          const blob = await getBlob(path);
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = node.displayName;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast(`Downloaded "${node.displayName}"`, 'success');
+          } else {
+            showToast('Image not found in storage', 'error');
+          }
+        } else {
+          const content =
+            (files as Record<string, string>)[path] ||
+            (await getContent(path)) ||
+            '';
+          const blob = new Blob([content], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = node.displayName;
+          a.click();
+          URL.revokeObjectURL(url);
+          showToast(`Downloaded "${node.displayName}"`, 'success');
+        }
+      } catch (err) {
+        showToast('Download failed', 'error');
+      }
+      setContextMenu((prev) => ({ ...prev, node: null }));
+    },
+    [files, showToast]
+  );
+
+  // ── Folder download (ZIP) – IMPROVED VERSION ──────────────────
+  const handleDownloadFolder = useCallback(
+    async (node: TreeNode) => {
+      if (node.type !== 'folder') return;
+
+      // Get all file paths that belong to this folder (including subfolders)
+      const folderPath = node.name;
+      const childFiles = fileNames.filter((path) => path.startsWith(folderPath + '/') || path === folderPath);
+      // Exclude the folder itself if it's also listed as a file (shouldn't happen, but safe)
+      const filesInFolder = childFiles.filter((p) => p !== folderPath);
+
+      if (filesInFolder.length === 0) {
+        showToast('Folder is empty', 'info');
         return;
       }
 
-      const batches: File[][] = [];
-      for (let i = 0; i < totalFiles; i += BATCH_SIZE) {
-        batches.push(fileArray.slice(i, i + BATCH_SIZE));
-      }
+      const zip = new JSZip();
+      let failedFiles: string[] = [];
+      let addedCount = 0;
 
-      let uploadedCount = 0;
-      const allFileData: any[] = [];
-      const folderPaths = new Set<string>();
-
-      const uploadBatchWithRetry = async (batch: File[], batchIndex: number, attempt = 1): Promise<any[]> => {
-        const formData = new FormData();
-        batch.forEach(file => formData.append('files', file));
-        formData.append('batchNumber', String(batchIndex + 1));
-        formData.append('totalBatches', String(batches.length));
-
+      const addFileToZip = async (filePath: string) => {
         try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 60000);
+          const ext = filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase();
+          const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
 
-          const response = await fetch(`${API_BASE}/upload/folder-batch`, {
-            method: 'POST',
-            body: formData,
-            signal: controller.signal,
-          });
-
-          clearTimeout(timeoutId);
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Batch ${batchIndex + 1} failed (${response.status}): ${errorText || response.statusText}`);
+          if (isImage) {
+            const blob = await getBlob(filePath);
+            if (blob && blob.size > 0) {
+              zip.file(filePath, blob);
+              console.log(`[Download Folder] Added image: ${filePath}`);
+            } else {
+              // Attempt fallback: maybe stored as data URL in files (unlikely)
+              const content = (files as Record<string, string>)[filePath];
+              if (content && content.startsWith('data:image')) {
+                const response = await fetch(content);
+                const fallbackBlob = await response.blob();
+                if (fallbackBlob.size > 0) {
+                  zip.file(filePath, fallbackBlob);
+                  console.log(`[Download Folder] Added image (fallback): ${filePath}`);
+                  return;
+                }
+              }
+              failedFiles.push(filePath);
+              console.warn(`[Download Folder] Image not found: ${filePath}`);
+            }
+          } else {
+            // Text file
+            const content =
+              (files as Record<string, string>)[filePath] ||
+              (await getContent(filePath)) ||
+              '';
+            // Always add the file, even if content is empty (empty file)
+            zip.file(filePath, content);
+            console.log(`[Download Folder] Added text file: ${filePath} (${content.length} chars)`);
           }
-
-          const result = await response.json();
-          if (!result.success) {
-            throw new Error(`Batch ${batchIndex + 1} returned success: false`);
-          }
-
-          return result.files || [];
+          addedCount++;
         } catch (error) {
-          if (attempt < MAX_RETRIES) {
-            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
-            await new Promise(r => setTimeout(r, delay));
-            return uploadBatchWithRetry(batch, batchIndex, attempt + 1);
-          }
-          throw error;
+          failedFiles.push(filePath);
+          console.error(`[Download Folder] Error adding ${filePath}:`, error);
         }
       };
 
-      const processQueue = async () => {
-        let batchIndex = 0;
-        const running: Promise<void>[] = [];
+      // Process in batches to avoid memory issues
+      const BATCH_SIZE = 20;
+      for (let i = 0; i < filesInFolder.length; i += BATCH_SIZE) {
+        const batch = filesInFolder.slice(i, i + BATCH_SIZE);
+        await Promise.all(batch.map(addFileToZip));
+      }
 
-        const runBatch = async (index: number) => {
-          const batch = batches[index];
-          const files = await uploadBatchWithRetry(batch, index);
-          allFileData.push(...files);
+      if (failedFiles.length > 0) {
+        showToast(`${failedFiles.length} file(s) could not be added to ZIP`, 'error');
+      }
 
-          files.forEach((fileData: any) => {
-            const path = fileData.filename;
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${node.displayName}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      if (failedFiles.length === 0) {
+        showToast(`Downloaded folder "${node.displayName}" as ZIP (${addedCount} files)`, 'success');
+      } else {
+        showToast(`Downloaded folder with ${failedFiles.length} missing files`, 'info');
+      }
+      setContextMenu((prev) => ({ ...prev, node: null }));
+    },
+    [fileNames, files, showToast]
+  );
+
+  // ── Import handlers (unchanged) ──────────────────────────────
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
+
+  const handleImport = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const fileList = e.target.files;
+      if (!fileList || fileList.length === 0) return;
+
+      const fileArray = Array.from(fileList);
+      const totalFiles = fileArray.length;
+
+      const DIRECT_LIMIT = 500;
+      const BATCH_SIZE = 500;
+      const CONCURRENCY = 3;
+      const MAX_RETRIES = 3;
+      const useBatch = totalFiles > DIRECT_LIMIT;
+
+      if (totalFiles > 5000) {
+        if (
+          !window.confirm(
+            `You selected ${totalFiles.toLocaleString()} files.\n\n` +
+              `This will be uploaded in batches of ${BATCH_SIZE} (${Math.ceil(totalFiles / BATCH_SIZE)} batches) to the server.\n` +
+              `It may take several minutes. Continue?`
+          )
+        ) {
+          e.target.value = '';
+          return;
+        }
+      }
+
+      setImporting(true);
+      setImportProgress({ current: 0, total: totalFiles });
+
+      try {
+        if (!useBatch) {
+          const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'ico', 'bmp']);
+          const folderPaths = new Set<string>();
+          let savedCount = 0;
+          const BATCH_UPDATE = 50;
+          let batchFiles: Record<string, string> = {};
+
+          for (let i = 0; i < fileArray.length; i++) {
+            const file = fileArray[i];
+            const path = (file as any).webkitRelativePath || file.name;
+            const ext = path.split('.').pop()?.toLowerCase() || '';
+            const isImage = imageExts.has(ext);
+
             const parts = path.split('/');
             let folderPath = '';
             for (let j = 0; j < parts.length - 1; j++) {
               folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
               folderPaths.add(folderPath);
             }
-          });
 
-          uploadedCount += batch.length;
+            if (isImage) {
+              await saveBlob(path, file);
+              batchFiles[path] = '';
+            } else {
+              const content = await file.text();
+              await saveContent(path, content);
+              batchFiles[path] = content;
+            }
 
-          if (uploadedCount % 25 === 0 || uploadedCount === totalFiles) {
-            setImportProgress({ current: uploadedCount, total: totalFiles });
+            savedCount++;
+
+            if (savedCount % 25 === 0 || savedCount === totalFiles) {
+              setImportProgress({ current: savedCount, total: totalFiles });
+            }
+
+            if (savedCount % BATCH_UPDATE === 0 || savedCount === totalFiles) {
+              const currentFiles = useWorkspaceStore.getState().files;
+              const currentFolders = useWorkspaceStore.getState().folders;
+              const mergedFiles = { ...currentFiles, ...batchFiles };
+              const mergedFolders = [...currentFolders];
+              for (const folder of folderPaths) {
+                if (!mergedFolders.includes(folder)) {
+                  mergedFolders.push(folder);
+                }
+              }
+              useWorkspaceStore.setState({
+                files: mergedFiles,
+                folders: mergedFolders,
+              });
+              batchFiles = {};
+              await new Promise((r) => setTimeout(r, 0));
+            }
+          }
+
+          setImportProgress({ current: savedCount, total: totalFiles });
+          showToast(`Successfully uploaded ${savedCount} files`, 'success');
+          return;
+        }
+
+        const batches: File[][] = [];
+        for (let i = 0; i < totalFiles; i += BATCH_SIZE) {
+          batches.push(fileArray.slice(i, i + BATCH_SIZE));
+        }
+
+        let uploadedCount = 0;
+        const allFileData: any[] = [];
+        const folderPaths = new Set<string>();
+
+        const uploadBatchWithRetry = async (
+          batch: File[],
+          batchIndex: number,
+          attempt = 1
+        ): Promise<any[]> => {
+          const formData = new FormData();
+          batch.forEach((file) => formData.append('files', file));
+          formData.append('batchNumber', String(batchIndex + 1));
+          formData.append('totalBatches', String(batches.length));
+
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+            const response = await fetch(`${API_BASE}/upload/folder-batch`, {
+              method: 'POST',
+              body: formData,
+              signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(
+                `Batch ${batchIndex + 1} failed (${response.status}): ${errorText || response.statusText}`
+              );
+            }
+
+            const result = await response.json();
+            if (!result.success) {
+              throw new Error(`Batch ${batchIndex + 1} returned success: false`);
+            }
+
+            return result.files || [];
+          } catch (error) {
+            if (attempt < MAX_RETRIES) {
+              const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+              await new Promise((r) => setTimeout(r, delay));
+              return uploadBatchWithRetry(batch, batchIndex, attempt + 1);
+            }
+            throw error;
           }
         };
 
-        while (batchIndex < batches.length || running.length > 0) {
-          while (running.length < CONCURRENCY && batchIndex < batches.length) {
-            const currentIndex = batchIndex++;
-            const promise = runBatch(currentIndex).finally(() => {
-              const idx = running.indexOf(promise as any);
-              if (idx > -1) running.splice(idx, 1);
+        const processQueue = async () => {
+          let batchIndex = 0;
+          const running: Promise<void>[] = [];
+
+          const runBatch = async (index: number) => {
+            const batch = batches[index];
+            const files = await uploadBatchWithRetry(batch, index);
+            allFileData.push(...files);
+
+            files.forEach((fileData: any) => {
+              const path = fileData.filename;
+              const parts = path.split('/');
+              let folderPath = '';
+              for (let j = 0; j < parts.length - 1; j++) {
+                folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
+                folderPaths.add(folderPath);
+              }
             });
-            running.push(promise as any);
+
+            uploadedCount += batch.length;
+
+            if (uploadedCount % 25 === 0 || uploadedCount === totalFiles) {
+              setImportProgress({ current: uploadedCount, total: totalFiles });
+            }
+          };
+
+          while (batchIndex < batches.length || running.length > 0) {
+            while (running.length < CONCURRENCY && batchIndex < batches.length) {
+              const currentIndex = batchIndex++;
+              const promise = runBatch(currentIndex).finally(() => {
+                const idx = running.indexOf(promise as any);
+                if (idx > -1) running.splice(idx, 1);
+              });
+              running.push(promise as any);
+            }
+
+            if (running.length > 0) {
+              await Promise.race(running);
+            }
           }
+        };
 
-          if (running.length > 0) {
-            await Promise.race(running);
-          }
-        }
-      };
+        await processQueue();
 
-      await processQueue();
-
-      setImportProgress({ current: uploadedCount, total: totalFiles });
-
-      const zustandFiles: Record<string, string> = {};
-      for (const fileData of allFileData) {
-        zustandFiles[fileData.filename] = fileData.content || '';
-      }
-
-      const currentFiles = useWorkspaceStore.getState().files;
-      const currentFolders = useWorkspaceStore.getState().folders;
-      useWorkspaceStore.setState({
-        files: { ...currentFiles, ...zustandFiles },
-        folders: [...new Set([...currentFolders, ...folderPaths])],
-      });
-
-      showToast(`Uploaded ${uploadedCount} files in ${batches.length} batches`, 'success');
-    } catch (error) {
-      showToast(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-    } finally {
-      setImporting(false);
-      setImportProgress({ current: 0, total: 0 });
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  }, [showToast, API_BASE]);
-
-  const handleZipUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (!fileList || fileList.length === 0) return;
-    const file = fileList[0];
-    if (!file.name.endsWith('.zip')) {
-      showToast('Please select a .zip file', 'error');
-      e.target.value = '';
-      return;
-    }
-
-    setImporting(true);
-    setImportProgress({ current: 0, total: 1 });
-
-    try {
-      const formData = new FormData();
-      formData.append('zip', file);
-      const response = await fetch(`${API_BASE}/upload/zip`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || 'ZIP upload failed');
-      }
-      const result = await response.json();
-      if (result.success && result.files) {
-        const entries = Object.entries(result.files);
-        const total = entries.length;
-        setImportProgress({ current: 0, total });
+        setImportProgress({ current: uploadedCount, total: totalFiles });
 
         const zustandFiles: Record<string, string> = {};
-        const folderPaths = new Set<string>();
-
-        for (let i = 0; i < entries.length; i++) {
-          const [path, content] = entries[i];
-          zustandFiles[path] = content as string;
-          const parts = path.split('/');
-          let folderPath = '';
-          for (let j = 0; j < parts.length - 1; j++) {
-            folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
-            folderPaths.add(folderPath);
-          }
-          if (i % 25 === 0) {
-            setImportProgress({ current: i, total });
-            await new Promise(r => setTimeout(r, 0));
-          }
+        for (const fileData of allFileData) {
+          zustandFiles[fileData.filename] = fileData.content || '';
         }
-
-        setImportProgress({ current: total, total });
 
         const currentFiles = useWorkspaceStore.getState().files;
         const currentFolders = useWorkspaceStore.getState().folders;
         useWorkspaceStore.setState({
           files: { ...currentFiles, ...zustandFiles },
-          folders: [...currentFolders, ...folderPaths],
+          folders: [...new Set([...currentFolders, ...folderPaths])],
         });
 
-        showToast(`Extracted ${total} files from ZIP`, 'success');
-      } else {
-        throw new Error('Invalid response from server');
+        showToast(`Uploaded ${uploadedCount} files in ${batches.length} batches`, 'success');
+      } catch (error) {
+        showToast(
+          `Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          'error'
+        );
+      } finally {
+        setImporting(false);
+        setImportProgress({ current: 0, total: 0 });
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
-    } catch (error) {
-      showToast(`ZIP upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-    } finally {
-      setImporting(false);
-      setImportProgress({ current: 0, total: 0 });
-      if (zipInputRef.current) zipInputRef.current.value = '';
-    }
-  }, [showToast, API_BASE]);
+    },
+    [showToast, API_BASE]
+  );
 
-  const toggleSettings = useCallback(() => window.dispatchEvent(new CustomEvent('toggle-settings')), []);
-  const toggleAccount = useCallback(() => window.dispatchEvent(new CustomEvent('toggle-account')), []);
+  const handleZipUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const fileList = e.target.files;
+      if (!fileList || fileList.length === 0) return;
+      const file = fileList[0];
+      if (!file.name.endsWith('.zip')) {
+        showToast('Please select a .zip file', 'error');
+        e.target.value = '';
+        return;
+      }
 
-  const isFileSelected = useCallback((name: string) => selectedFiles.has(name), [selectedFiles]);
+      setImporting(true);
+      setImportProgress({ current: 0, total: 1 });
 
-  // ────────────────────────────────────────────────────────────────
-  // SCROLL PERF: Compute slice from refs, not state
-  // ────────────────────────────────────────────────────────────────
+      try {
+        const formData = new FormData();
+        formData.append('zip', file);
+        const response = await fetch(`${API_BASE}/upload/zip`, {
+          method: 'POST',
+          body: formData,
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(errorText || 'ZIP upload failed');
+        }
+        const result = await response.json();
+        if (result.success && result.files) {
+          const entries = Object.entries(result.files);
+          const total = entries.length;
+          setImportProgress({ current: 0, total });
+
+          const zustandFiles: Record<string, string> = {};
+          const folderPaths = new Set<string>();
+
+          for (let i = 0; i < entries.length; i++) {
+            const [path, content] = entries[i];
+            zustandFiles[path] = content as string;
+            const parts = path.split('/');
+            let folderPath = '';
+            for (let j = 0; j < parts.length - 1; j++) {
+              folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
+              folderPaths.add(folderPath);
+            }
+            if (i % 25 === 0) {
+              setImportProgress({ current: i, total });
+              await new Promise((r) => setTimeout(r, 0));
+            }
+          }
+
+          setImportProgress({ current: total, total });
+
+          const currentFiles = useWorkspaceStore.getState().files;
+          const currentFolders = useWorkspaceStore.getState().folders;
+          useWorkspaceStore.setState({
+            files: { ...currentFiles, ...zustandFiles },
+            folders: [...currentFolders, ...folderPaths],
+          });
+
+          showToast(`Extracted ${total} files from ZIP`, 'success');
+        } else {
+          throw new Error('Invalid response from server');
+        }
+      } catch (error) {
+        showToast(
+          `ZIP upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          'error'
+        );
+      } finally {
+        setImporting(false);
+        setImportProgress({ current: 0, total: 0 });
+        if (zipInputRef.current) zipInputRef.current.value = '';
+      }
+    },
+    [showToast, API_BASE]
+  );
+
+  const toggleSettings = useCallback(
+    () => window.dispatchEvent(new CustomEvent('toggle-settings')),
+    []
+  );
+  const toggleAccount = useCallback(
+    () => window.dispatchEvent(new CustomEvent('toggle-account')),
+    []
+  );
+
+  const isFileSelected = useCallback(
+    (name: string) => selectedFiles.has(name),
+    [selectedFiles]
+  );
+
+  // Virtual scroll slice
   const scrollTop = scrollTopRef.current;
   const containerHeight = containerHeightRef.current;
   const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
-  const endIndex = Math.min(visibleNodes.length, Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + OVERSCAN);
+  const endIndex = Math.min(
+    visibleNodes.length,
+    Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + OVERSCAN
+  );
   const visibleSlice = visibleNodes.slice(startIndex, endIndex);
 
   return (
     <div className="h-full flex flex-col bg-[#0d1117] min-w-0">
+      {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-2 bg-[#161b22] border-b border-[#21262d] shrink-0">
-        <span className="text-[11px] font-semibold text-[#c9d1d9] tracking-wide">EXPLORER</span>
+        <span className="text-[11px] font-semibold text-[#c9d1d9] tracking-wide">
+          EXPLORER
+        </span>
         <div className="flex items-center gap-0.5">
           <button
             onClick={() => setIsSearchOpen(!isSearchOpen)}
@@ -993,10 +1360,18 @@ export default function FileExplorer() {
 
           {selectedFiles.size > 0 && (
             <>
-              <button onClick={handleDeleteSelected} className="p-1 hover:bg-[#30363d] rounded transition text-[#f85149]" title={`Delete ${selectedFiles.size} selected`}>
+              <button
+                onClick={handleDeleteSelected}
+                className="p-1 hover:bg-[#30363d] rounded transition text-[#f85149]"
+                title={`Delete ${selectedFiles.size} selected`}
+              >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
-              <button onClick={clearSelection} className="p-1 hover:bg-[#30363d] rounded transition text-[#8b949e]" title="Clear selection">
+              <button
+                onClick={clearSelection}
+                className="p-1 hover:bg-[#30363d] rounded transition text-[#8b949e]"
+                title="Clear selection"
+              >
                 <X className="w-3.5 h-3.5" />
               </button>
             </>
@@ -1008,7 +1383,9 @@ export default function FileExplorer() {
             title="Import Folder"
             disabled={importing}
           >
-            <Upload className={`w-3.5 h-3.5 ${importing ? 'text-[#58a6ff] animate-pulse' : 'text-[#8b949e] hover:text-[#c9d1d9]'}`} />
+            <Upload
+              className={`w-3.5 h-3.5 ${importing ? 'text-[#58a6ff] animate-pulse' : 'text-[#8b949e] hover:text-[#c9d1d9]'}`}
+            />
           </button>
 
           <button
@@ -1017,18 +1394,39 @@ export default function FileExplorer() {
             title="Upload ZIP"
             disabled={importing}
           >
-            <FileArchive className={`w-3.5 h-3.5 ${importing ? 'text-[#58a6ff] animate-pulse' : 'text-[#8b949e] hover:text-[#c9d1d9]'}`} />
+            <FileArchive
+              className={`w-3.5 h-3.5 ${importing ? 'text-[#58a6ff] animate-pulse' : 'text-[#8b949e] hover:text-[#c9d1d9]'}`}
+            />
           </button>
 
-          <button onClick={() => startCreateFile()} className="p-1 hover:bg-[#30363d] rounded transition" title="New File">
+          <button
+            onClick={() => startCreateFile()}
+            className="p-1 hover:bg-[#30363d] rounded transition"
+            title="New File"
+          >
             <FilePlus className="w-3.5 h-3.5 text-[#8b949e] hover:text-[#c9d1d9]" />
           </button>
-          <button onClick={() => startCreateFolder()} className="p-1 hover:bg-[#30363d] rounded transition" title="New Folder">
+          <button
+            onClick={() => startCreateFolder()}
+            className="p-1 hover:bg-[#30363d] rounded transition"
+            title="New Folder"
+          >
             <FolderPlus className="w-3.5 h-3.5 text-[#8b949e] hover:text-[#c9d1d9]" />
           </button>
+
+          {clipboard.length > 0 && (
+            <button
+              onClick={handlePaste}
+              className="p-1 hover:bg-[#30363d] rounded transition"
+              title={`Paste ${clipboard.length} item(s)`}
+            >
+              <ClipboardPaste className="w-3.5 h-3.5 text-[#8b949e] hover:text-[#c9d1d9]" />
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
         type="file"
@@ -1046,23 +1444,29 @@ export default function FileExplorer() {
         onChange={handleZipUpload}
       />
 
+      {/* Import progress */}
       {importing && (
         <div className="px-3 py-2 bg-[#1f6feb]/10 border-b border-[#30363d] shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 border-2 border-[#58a6ff] border-t-transparent rounded-full animate-spin" />
             <span className="text-[10px] text-[#58a6ff]">
-              {importProgress.total === 0 ? 'Processing...' : `Importing ${importProgress.current} / ${importProgress.total}`}
+              {importProgress.total === 0
+                ? 'Processing...'
+                : `Importing ${importProgress.current} / ${importProgress.total}`}
             </span>
           </div>
           <div className="w-full h-1 bg-[#21262d] rounded-full mt-1 overflow-hidden">
             <div
               className="h-full bg-[#58a6ff] transition-all"
-              style={{ width: `${importProgress.total > 0 ? (importProgress.current / importProgress.total) * 100 : 0}%` }}
+              style={{
+                width: `${importProgress.total > 0 ? (importProgress.current / importProgress.total) * 100 : 0}%`,
+              }}
             />
           </div>
         </div>
       )}
 
+      {/* Search bar */}
       {isSearchOpen && (
         <div className="px-3 py-2 border-b border-[#21262d] shrink-0">
           <div className="relative">
@@ -1076,7 +1480,10 @@ export default function FileExplorer() {
               autoFocus
             />
             {searchQuery && (
-              <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#484f58] hover:text-[#c9d1d9]">
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[#484f58] hover:text-[#c9d1d9]"
+              >
                 <X className="w-3 h-3" />
               </button>
             )}
@@ -1084,14 +1491,27 @@ export default function FileExplorer() {
         </div>
       )}
 
+      {/* Selection bar */}
       {selectedFiles.size > 0 && (
         <div className="px-3 py-2 bg-[#1f6feb]/10 border-b border-[#30363d] shrink-0 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <button onClick={selectAll} className="text-[10px] text-[#58a6ff] hover:underline">Select All</button>
+            <button
+              onClick={selectAll}
+              className="text-[10px] text-[#58a6ff] hover:underline"
+            >
+              Select All
+            </button>
             <span className="text-[10px] text-[#58a6ff]">|</span>
-            <button onClick={clearSelection} className="text-[10px] text-[#8b949e] hover:text-[#c9d1d9]">Clear</button>
+            <button
+              onClick={clearSelection}
+              className="text-[10px] text-[#8b949e] hover:text-[#c9d1d9]"
+            >
+              Clear
+            </button>
           </div>
-          <span className="text-[10px] text-[#58a6ff] font-medium">{selectedFiles.size} selected</span>
+          <span className="text-[10px] text-[#58a6ff] font-medium">
+            {selectedFiles.size} selected
+          </span>
           <button
             onClick={handleDeleteSelected}
             className="flex items-center gap-1 px-2 py-1 bg-[#f85149]/20 text-[#f85149] rounded text-[10px] hover:bg-[#f85149]/30 transition"
@@ -1101,18 +1521,24 @@ export default function FileExplorer() {
         </div>
       )}
 
+      {/* Workspace header */}
       <div className="px-3 py-2 flex items-center gap-2 border-b border-[#21262d] shrink-0">
         <ChevronDown className="w-3 h-3 text-[#8b949e]" />
-        <span className="text-[11px] font-bold text-[#c9d1d9]">AI CODE WORKSPACE</span>
+        <span className="text-[11px] font-bold text-[#c9d1d9]">
+          AI CODE WORKSPACE
+        </span>
         <span className="text-[9px] text-[#484f58] ml-auto">
           {`${fileNames.length} files`}
         </span>
       </div>
 
+      {/* New file input */}
       {showNewFile && (
         <div className="px-3 py-1.5 border-b border-[#21262d] shrink-0">
           <div className="text-[10px] text-[#8b949e] mb-1">
-            {newFileTargetFolder ? `New file in "${newFileTargetFolder}/"` : 'New file in root'}
+            {newFileTargetFolder
+              ? `New file in "${newFileTargetFolder}/"`
+              : 'New file in root'}
           </div>
           <input
             type="text"
@@ -1120,7 +1546,11 @@ export default function FileExplorer() {
             onChange={(e) => setNewFileName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleCreateFile();
-              if (e.key === 'Escape') { setShowNewFile(false); setNewFileName(''); setNewFileTargetFolder(null); }
+              if (e.key === 'Escape') {
+                setShowNewFile(false);
+                setNewFileName('');
+                setNewFileTargetFolder(null);
+              }
             }}
             placeholder="filename.js"
             className="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-[11px] text-[#c9d1d9] outline-none focus:border-[#58a6ff] placeholder:text-[#484f58]"
@@ -1129,10 +1559,13 @@ export default function FileExplorer() {
         </div>
       )}
 
+      {/* New folder input */}
       {showNewFolder && (
         <div className="px-3 py-1.5 border-b border-[#21262d] shrink-0">
           <div className="text-[10px] text-[#8b949e] mb-1">
-            {newFolderTarget ? `New folder in "${newFolderTarget}/"` : 'New folder in root'}
+            {newFolderTarget
+              ? `New folder in "${newFolderTarget}/"`
+              : 'New folder in root'}
           </div>
           <input
             type="text"
@@ -1140,7 +1573,11 @@ export default function FileExplorer() {
             onChange={(e) => setNewFolderName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleCreateFolder();
-              if (e.key === 'Escape') { setShowNewFolder(false); setNewFolderName(''); setNewFolderTarget(null); }
+              if (e.key === 'Escape') {
+                setShowNewFolder(false);
+                setNewFolderName('');
+                setNewFolderTarget(null);
+              }
             }}
             placeholder="folder-name"
             className="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-[11px] text-[#c9d1d9] outline-none focus:border-[#58a6ff] placeholder:text-[#484f58]"
@@ -1149,6 +1586,7 @@ export default function FileExplorer() {
         </div>
       )}
 
+      {/* Rename input */}
       {renamingFile && (
         <div className="px-3 py-1.5 border-b border-[#21262d] shrink-0">
           <input
@@ -1157,7 +1595,10 @@ export default function FileExplorer() {
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleRenameSubmit();
-              if (e.key === 'Escape') { setRenamingFile(null); setRenameValue(''); }
+              if (e.key === 'Escape') {
+                setRenamingFile(null);
+                setRenameValue('');
+              }
             }}
             onBlur={handleRenameSubmit}
             className="w-full bg-[#0d1117] border border-[#58a6ff] rounded px-2 py-1 text-[11px] text-[#c9d1d9] outline-none"
@@ -1166,6 +1607,7 @@ export default function FileExplorer() {
         </div>
       )}
 
+      {/* File tree */}
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 custom-scrollbar relative"
@@ -1174,7 +1616,9 @@ export default function FileExplorer() {
         {filteredTree.length === 0 ? (
           <div className="px-3 py-8 text-center">
             <div className="text-[11px] text-[#484f58] mb-4">
-              {debouncedSearch ? `No results for "${debouncedSearch}"` : 'No files or folders yet'}
+              {debouncedSearch
+                ? `No results for "${debouncedSearch}"`
+                : 'No files or folders yet'}
             </div>
             {!debouncedSearch && (
               <div className="flex flex-col gap-2 items-center">
@@ -1219,20 +1663,30 @@ export default function FileExplorer() {
                 onDelete={handleDelete}
                 onContextMenu={handleContextMenu}
                 onToggleSelect={toggleSelect}
-                style={{ height: ITEM_HEIGHT, top: (startIndex + idx) * ITEM_HEIGHT }}
+                style={{
+                  height: ITEM_HEIGHT,
+                  top: (startIndex + idx) * ITEM_HEIGHT,
+                }}
               />
             ))}
           </div>
         )}
       </div>
 
+      {/* Footer */}
       <div className="border-t border-[#21262d] bg-[#161b22] shrink-0">
         <div className="flex items-center border-b border-[#21262d]">
-          <button onClick={toggleSettings} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition">
+          <button
+            onClick={toggleSettings}
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition"
+          >
             <Settings className="w-3 h-3" /> Settings
           </button>
           <div className="w-px h-4 bg-[#30363d]" />
-          <button onClick={toggleAccount} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition">
+          <button
+            onClick={toggleAccount}
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition"
+          >
             <User className="w-3 h-3" /> Account
           </button>
         </div>
@@ -1245,6 +1699,7 @@ export default function FileExplorer() {
         </div>
       </div>
 
+      {/* Context menu */}
       {contextMenu.node && (
         <div
           ref={contextMenuRef}
@@ -1252,29 +1707,60 @@ export default function FileExplorer() {
           style={{ top: contextMenu.y, left: contextMenu.x }}
         >
           {contextMenu.node.type === 'file' && (
-            <button
-              onClick={() => { openFile(contextMenu.node!.name); setContextMenu(prev => ({ ...prev, node: null })); }}
-              className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
-            >
-              <FileText className="w-3.5 h-3.5" /> Open
-            </button>
+            <>
+              <button
+                onClick={() => {
+                  openFile(contextMenu.node!.name);
+                  setContextMenu((prev) => ({ ...prev, node: null }));
+                }}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+              >
+                <FileText className="w-3.5 h-3.5" /> Open
+              </button>
+              <button
+                onClick={() => handleDownload(contextMenu.node!)}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+              >
+                <Download className="w-3.5 h-3.5" /> Download
+              </button>
+              <button
+                onClick={() => handleCopy()}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+              >
+                <Copy className="w-3.5 h-3.5" /> Copy
+              </button>
+            </>
           )}
 
           {contextMenu.node.type === 'folder' && (
             <>
               <button
-                onClick={() => { setNewFileTargetFolder(contextMenu.node!.name); setShowNewFile(true); setContextMenu(prev => ({ ...prev, node: null })); }}
+                onClick={() => {
+                  setNewFileTargetFolder(contextMenu.node!.name);
+                  setShowNewFile(true);
+                  setContextMenu((prev) => ({ ...prev, node: null }));
+                }}
                 className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
               >
                 <FilePlus className="w-3.5 h-3.5 text-[#58a6ff]" /> New File
               </button>
               <button
-                onClick={() => { setNewFolderTarget(contextMenu.node!.name); setShowNewFolder(true); setContextMenu(prev => ({ ...prev, node: null })); }}
+                onClick={() => {
+                  setNewFolderTarget(contextMenu.node!.name);
+                  setShowNewFolder(true);
+                  setContextMenu((prev) => ({ ...prev, node: null }));
+                }}
                 className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
               >
                 <FolderPlus className="w-3.5 h-3.5 text-[#e3b341]" /> New Folder
               </button>
               <div className="h-px bg-[#30363d] my-1" />
+              <button
+                onClick={() => handleDownloadFolder(contextMenu.node!)}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+              >
+                <Download className="w-3.5 h-3.5" /> Download as ZIP
+              </button>
             </>
           )}
 
@@ -1284,6 +1770,16 @@ export default function FileExplorer() {
           >
             <Edit3 className="w-3.5 h-3.5" /> Rename
           </button>
+
+          {clipboard.length > 0 && contextMenu.node.type !== 'folder' && (
+            <button
+              onClick={() => handlePaste()}
+              className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5" /> Paste
+            </button>
+          )}
+
           <button
             onClick={() => handleDelete(contextMenu.node!)}
             className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#f85149] hover:bg-[#21262d] transition"
