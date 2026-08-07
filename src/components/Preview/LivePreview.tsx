@@ -279,7 +279,7 @@ export default function LivePreview() {
     }
     
     const baseFolder = htmlPath ? getFolderPath(htmlPath) : '';
-    const css = await getFileContentAsync('style.css', baseFolder);
+    let css = await getFileContentAsync('style.css', baseFolder);
     let js = await getFileContentAsync('script.js', baseFolder);
 
     js = stripTypeScript(js);
@@ -305,6 +305,8 @@ export default function LivePreview() {
     }
 
     let previewHTML = html;
+    const hasLinkedStylesheets = /<link\s+[^>]*rel=["']stylesheet["'][^>]*>/i.test(previewHTML);
+    const hasLinkedScripts = /<script\b[^>]*src=["'][^"']+["'][^>]*>/i.test(previewHTML);
 
     if (!previewHTML.includes('<meta name="viewport"')) {
       previewHTML = previewHTML.replace(
@@ -315,7 +317,7 @@ export default function LivePreview() {
 
     previewHTML = await inlineLocalStylesheets(previewHTML, baseFolder);
     
-    if (css) {
+    if (!hasLinkedStylesheets && css) {
       const styleTag = `<style>${await rewriteCssAssetUrls(css, baseFolder)}</style>`;
       if (previewHTML.includes('</head>')) {
         previewHTML = previewHTML.replace('</head>', styleTag + '</head>');
@@ -327,9 +329,8 @@ export default function LivePreview() {
     previewHTML = await inlineLocalScripts(previewHTML, baseFolder);
     previewHTML = await rewriteHtmlSources(previewHTML, baseFolder);
 
-    if (js) {
+    if (!hasLinkedScripts && js) {
       const wrappedJS = wrapUserScript(js);
-      previewHTML = previewHTML.replace(/<script[^>]*src=["'][^"']*script\.js["'][^>]*><\/script>/gi, '');
       previewHTML = previewHTML.replace('</body>', wrappedJS + '</body>');
     }
 
