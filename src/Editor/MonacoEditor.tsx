@@ -1,12 +1,13 @@
 // src/Editor/MonacoEditor.tsx
 import { useRef, useEffect, useCallback, useState } from 'react';
 import Editor from '@monaco-editor/react';
-import type { editor as MonacoEditorType } from 'monaco-editor';
+import type { editor as MonacoEditorType, IDisposable, languages } from 'monaco-editor';
 import { useWorkspaceStore } from '../store/workspaceStore';
 import { useEditorStore } from '../store/editorStore';
 import { getFileLanguage } from '../utils/formatter';
 import { formatHTML, formatCSS, formatJS } from '../utils/formatter';
 import { getContent, getBlob, saveContent } from '../lib/fileStorage';
+import { useEditorShortcuts } from '../hooks/useEditorShortcuts';
 
 // ─── Previewable extensions (images + videos) ──────────────────────
 const PREVIEW_EXTENSIONS = [
@@ -31,8 +32,9 @@ function getMimeType(ext: string): string {
 
 export default function MonacoEditorComponent() {
   const editorRef = useRef<MonacoEditorType.IStandaloneCodeEditor | null>(null);
-  const monacoRef = useRef<any>(null);
-  const completionDisposableRef = useRef<any>(null);
+  const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
+  const completionDisposableRef = useRef<IDisposable | null>(null);
+  const saveTimeoutRef = useRef<number | null>(null);
 
   const {
     files,
@@ -42,12 +44,81 @@ export default function MonacoEditorComponent() {
   } = useWorkspaceStore();
 
   const { setEditor, setReady, setContext, setSelection } = useEditorStore();
+  const editorInstance = useEditorStore((state) => state.editor);
 
   const [currentContent, setCurrentContent] = useState('');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isVideo, setIsVideo] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const language = getFileLanguage(activeFile);
+
+  const activeFileRef = useRef(activeFile);
+  useEffect(() => {
+    activeFileRef.current = activeFile;
+  }, [activeFile]);
+
+  const saveAllFiles = useCallback(async () => {
+    const entries = Object.entries(files);
+    await Promise.all(
+      entries.map(([path, content]) => saveContent(path, content).catch((error) => {
+        console.error(`[Monaco] Failed to save file ${path}:`, error);
+      }))
+    );
+  }, [files]);
+
+  useEditorShortcuts({
+    editor: editorInstance,
+    onSave: saveAllFiles,
+    onFormat: () => {
+      const content = editorRef.current?.getValue();
+      if (content === undefined || !activeFileRef.current) return;
+
+      let formatted = content;
+      const lang = getFileLanguage(activeFileRef.current);
+
+      if (lang === 'html') formatted = formatHTML(content);
+      else if (lang === 'css') formatted = formatCSS(content);
+      else if (lang === 'javascript') formatted = formatJS(content);
+
+      if (formatted !== content && editorRef.current) {
+        editorRef.current.setValue(formatted);
+      }
+      updateFile(activeFileRef.current, formatted);
+      saveContent(activeFileRef.current, formatted).catch(console.error);
+    },
+  });
+
+  useEffect(() => {
+    const handleSaveEvent = () => {
+      saveAllFiles();
+    };
+
+    const handleFormatEvent = () => {
+      const content = editorRef.current?.getValue();
+      if (content === undefined || !activeFileRef.current) return;
+
+      let formatted = content;
+      const lang = getFileLanguage(activeFileRef.current);
+
+      if (lang === 'html') formatted = formatHTML(content);
+      else if (lang === 'css') formatted = formatCSS(content);
+      else if (lang === 'javascript') formatted = formatJS(content);
+
+      if (formatted !== content && editorRef.current) {
+        editorRef.current.setValue(formatted);
+      }
+      updateFile(activeFileRef.current, formatted);
+      saveContent(activeFileRef.current, formatted).catch(console.error);
+    };
+
+    window.addEventListener('save-files', handleSaveEvent);
+    window.addEventListener('format-code', handleFormatEvent);
+
+    return () => {
+      window.removeEventListener('save-files', handleSaveEvent);
+      window.removeEventListener('format-code', handleFormatEvent);
+    };
+  }, [saveAllFiles, updateFile]);
 
   // ── Preview loader (images + videos) ──────────────────────────────
   useEffect(() => {
@@ -150,9 +221,10 @@ export default function MonacoEditorComponent() {
         URL.revokeObjectURL(previewUrl);
       }
     };
-  }, [activeFile, files]);
+  }, [activeFile, files, previewUrl]);
 
   // ── Load text content ──────────────────────────────────────────────
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     if (!activeFile) {
       setCurrentContent('');
@@ -215,17 +287,59 @@ export default function MonacoEditorComponent() {
   }, []);
 
   // ─── Register snippets (unchanged) ──────────────────────────────────
-  const registerSnippets = useCallback((monaco: any) => {
+  const registerSnippets = useCallback((monaco: typeof import('monaco-editor')) => {
     if (completionDisposableRef.current) {
       completionDisposableRef.current.dispose();
       completionDisposableRef.current = null;
     }
 
-    const snippets: Record<string, Array<{ prefix: string; body: string; description: string }>> = {
-      // ... (keep the existing snippets, omitted for brevity but they're unchanged)
+    const htmlBoilerplate = {
+      label: 'boilerplate',
+      kind: monaco.languages.CompletionItemKind.Snippet,
+      documentation: 'Insert a basic HTML/CSS/JS boilerplate',
+      insertText: [
+        '<!DOCTYPE html>',
+        '<html lang="en">',
+        '<head>',
+        '  <meta charset="UTF-8">',
+        '  <meta name="viewport" content="width=device-width, initial-scale=1.0">',
+        '  <title>${1:Document}</title>',
+        '  <style>${2:body { font-family: Arial, sans-serif; }}</style>',
+        '</head>',
+        '<body>',
+        '  <h1>${3:Hello, world!}</h1>',
+        '  <script>${4:console.log("Hello World");}</script>',
+        '</body>',
+        '</html>',
+      ].join('\n'),
+      insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+      filterText: '!',
     };
 
-    // ... (rest of the snippet registration)
+    const provider = monaco.languages.registerCompletionItemProvider('html', {
+      triggerCharacters: ['!'],
+      provideCompletionItems: (model, position, context) => {
+        if (context.triggerCharacter !== '!') {
+          return { suggestions: [] };
+        }
+
+        const range = {
+          startLineNumber: position.lineNumber,
+          startColumn: position.column - 1,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column,
+        };
+
+        return {
+          suggestions: [{
+            ...htmlBoilerplate,
+            range,
+          }],
+        };
+      },
+    });
+
+    completionDisposableRef.current = provider;
   }, []);
 
   // ─── Apply theme (unchanged) ──────────────────────────────────
@@ -264,7 +378,7 @@ export default function MonacoEditorComponent() {
       const cursor = editor.getPosition();
 
       setContext({
-        activeFile: activeFile || '',
+        activeFile: activeFileRef.current || '',
         language: model.getLanguageId(),
         selectedText: selectedText || '',
         fullText: model.getValue(),
@@ -286,39 +400,17 @@ export default function MonacoEditorComponent() {
       }
     };
 
-    editor.onDidChangeCursorSelection(updateContext);
-    editor.onDidChangeCursorPosition(updateContext);
-    editor.onDidBlurEditorWidget(() => {
+    const selectionDisposable = editor.onDidChangeCursorSelection(updateContext);
+    const positionDisposable = editor.onDidChangeCursorPosition(updateContext);
+    const blurDisposable = editor.onDidBlurEditorWidget(() => {
       setContext(null);
       setSelection(null);
     });
 
-    // ─── Keyboard shortcuts ───────────────────────────────────────────
-    editor.addCommand(
-      (window as any).monaco?.KeyMod?.CtrlCmd | (window as any).monaco?.KeyCode?.KeyS || 49,
-      () => {
-        window.dispatchEvent(new CustomEvent('save-files'));
-      }
-    );
-
-    const handleFormat = () => {
-      if (!editorRef.current) return;
-      const content = editorRef.current.getValue();
-      let formatted = content;
-      const lang = getFileLanguage(activeFile);
-
-      if (lang === 'html') formatted = formatHTML(content);
-      else if (lang === 'css') formatted = formatCSS(content);
-      else if (lang === 'javascript') formatted = formatJS(content);
-
-      editorRef.current.setValue(formatted);
-      updateFile(activeFile, formatted);
-      saveContent(activeFile, formatted).catch(console.error);
-    };
-
-    window.addEventListener('format-code', handleFormat);
     return () => {
-      window.removeEventListener('format-code', handleFormat);
+      selectionDisposable.dispose();
+      positionDisposable.dispose();
+      blurDisposable.dispose();
       setEditor(null);
       setReady(false);
       if (completionDisposableRef.current) {
@@ -331,21 +423,30 @@ export default function MonacoEditorComponent() {
   const handleChange = useCallback(
     (value: string | undefined) => {
       if (value !== undefined && activeFile) {
+        setCurrentContent(value);
         updateFile(activeFile, value);
-        saveContent(activeFile, value).catch(console.error);
+
+        if (saveTimeoutRef.current) {
+          window.clearTimeout(saveTimeoutRef.current);
+        }
+
+        saveTimeoutRef.current = window.setTimeout(() => {
+          saveContent(activeFile, value).catch(console.error);
+          saveTimeoutRef.current = null;
+        }, 400);
       }
     },
     [activeFile, updateFile]
   );
 
   useEffect(() => {
-    if (editorRef.current && previewUrl === null && !previewError) {
-      const editorValue = editorRef.current.getValue();
-      if (editorValue !== currentContent) {
-        editorRef.current.setValue(currentContent);
+    return () => {
+      if (saveTimeoutRef.current) {
+        window.clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
       }
-    }
-  }, [currentContent, previewUrl, previewError]);
+    };
+  }, []);
 
   // ─── Render ──────────────────────────────────────────────────────
 
@@ -408,6 +509,7 @@ export default function MonacoEditorComponent() {
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0a0a0a]">
       <Editor
         height="100%"
+        path={activeFile}
         language={language}
         value={currentContent}
         theme={editorOptions.theme || 'vs-dark'}
@@ -424,6 +526,13 @@ export default function MonacoEditorComponent() {
           scrollBeyondLastLine: false,
           automaticLayout: true,
           padding: { top: 8 },
+          mouseWheelScrollSensitivity: 1,
+          smoothScrolling: true,
+          scrollbar: {
+            alwaysConsumeMouseWheel: true,
+            vertical: 'visible',
+            horizontal: 'auto',
+          },
           renderWhitespace: 'selection',
           bracketPairColorization: { enabled: true },
           guides: {
@@ -438,7 +547,6 @@ export default function MonacoEditorComponent() {
           autoClosingQuotes: 'always',
           formatOnPaste: true,
           formatOnType: true,
-          smoothScrolling: true,
           cursorBlinking: 'smooth',
           cursorSmoothCaretAnimation: 'on',
           contextmenu: true,
