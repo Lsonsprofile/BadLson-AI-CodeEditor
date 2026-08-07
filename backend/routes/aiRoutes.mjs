@@ -17,10 +17,18 @@ router.post('/chat', async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('[AI Route] Chat error:', error.message);
+    console.error(error.stack); // log full stack for debugging
+
+    const errorMessage = error.message || 'Unknown error occurred while calling AI.';
     res.status(500).json({
       success: false,
-      error: error.message,
-      suggestion: 'Check API keys or enable MOCK_AI in backend/.env'
+      error: errorMessage,
+      data: {
+        message: `❌ ${errorMessage}`,
+        // Provide a fallback suggestion
+        suggestion: 'Check API keys or enable MOCK_AI in backend/.env',
+      },
+      suggestion: 'Check API keys or enable MOCK_AI in backend/.env',
     });
   }
 });
@@ -45,7 +53,10 @@ router.post('/stream', async (req, res) => {
     });
   } catch (error) {
     console.error('[AI Route] Stream error:', error.message);
-    res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+    console.error(error.stack);
+    const errorMessage = error.message || 'Stream error occurred.';
+    // Send error via SSE
+    res.write(`data: ${JSON.stringify({ error: errorMessage, done: true })}\n\n`);
     res.end();
   }
 });
@@ -57,7 +68,12 @@ router.post('/analyze', async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('[AI Route] Analyze error:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      data: { message: `❌ ${error.message}` },
+    });
   }
 });
 
@@ -68,7 +84,12 @@ router.post('/explain', async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('[AI Route] Explain error:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      data: { message: `❌ ${error.message}` },
+    });
   }
 });
 
@@ -79,6 +100,7 @@ router.get('/models', async (req, res) => {
     res.json({ success: true, data: models });
   } catch (error) {
     console.error('[AI Route] Models error:', error.message);
+    console.error(error.stack);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -90,6 +112,7 @@ router.get('/test', async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('[AI Route] Test error:', error.message);
+    console.error(error.stack);
     res.status(500).json({ success: false, error: error.message });
   }
 });

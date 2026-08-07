@@ -53,7 +53,6 @@ const MODEL_CACHE_TTL_MS = 1000 * 60 * 30;
 
 // ─── PERSONALITY & SYSTEM PROMPTS ────────────────────────────────
 
-/** New general‑purpose personality for non‑code questions */
 const GENERAL_PERSONALITY = `You are a helpful assistant having a natural conversation with a developer.
 
 HOW TO RESPOND:
@@ -66,7 +65,6 @@ HOW TO RESPOND:
 - Think out loud only when it helps the user understand your reasoning.
 - Ask follow‑up questions naturally when you need more info.`;
 
-/** Calm, professional code‑focused personality (toned down from emoji‑heavy version) */
 const BASE_SYSTEM = `You are an experienced software engineer pair‑programming with another developer. 
 You work inside the BadLson AI Code Editor.
 
@@ -95,36 +93,56 @@ const MODE_PROMPTS = {
   generic: BASE_SYSTEM,
 };
 
-// ─── MODE DETECTION ────────────────────────────────────────────────
+// ─── MODE DETECTION (FIXED) ──────────────────────────────────────
 
 function detectMode(userMessage, context = {}) {
   const msg = userMessage.toLowerCase().trim();
 
-  // GENERAL QUESTIONS — no project context needed
+  // ── SUPER AGGRESSIVE GENERAL PATTERNS ────────────────────────────
   const generalPatterns = [
-    /^hello\b/, /^hi\b/, /^hey\b/, /^how are you\b/,
-    /^\d+\s*[\+\-\*\/]\s*\d+/,           // "2 + 2", "5 * 3"
-    /what is \d+/, /what's \d+/,         // "what is 2 plus 2"
-    /who (is|are|was|were)/,             // "who is..."
-    /where (is|are)/, /when (did|was)/,
-    /why (is|are|does|do)/,
-    /tell me about yourself/, /what can you do/,
-    /thank you/, /thanks/,
-    /good morning/, /good afternoon/, /good evening/,
-    /what's up/, /how's it going/,
-    /^(yes|no|maybe|ok|sure|great|cool|nice)\b/,
-    /^[a-z]+$/,                          // single word like "hello", "hi"
-    /^\s*$/,                             // empty
+    /^(hello|hi|hey|howdy|greetings|yo|sup|what's up|how are you|how're you|how do you do)\b/i,
+    /^(thanks|thank you|ty|thx|cheers|appreciate it)\b/i,
+    /^(good morning|good afternoon|good evening|good night)\b/i,
+    /^(yes|no|maybe|ok|okay|sure|great|cool|nice|awesome|amazing|fine|alright)\b/i,
+    /^(who are you|what are you|what can you do|tell me about yourself|what's your name)\b/i,
+    /^(2\s*\+\s*2|what is 2\+2|math|calculate|plus|minus|multiply|divide)\b/i,
+    /^(how|why|what|where|when|who)\s+(is|are|was|were|does|do|did|can|could|will|would)\s+/i,
+    /^[a-z]{1,5}$/i, // short single words like "hello", "hey", "hi"
   ];
-  if (generalPatterns.some(p => p.test(msg))) return 'general';
+  if (generalPatterns.some(p => p.test(msg))) {
+    console.log(`[detectMode] → general (matched pattern)`);
+    return 'general';
+  }
 
-  // If there are errors, prioritize error mode
-  if (context.consoleErrors?.length || context.buildErrors?.length) return 'error';
-  if (msg.includes('review') || msg.includes('check this code')) return 'review';
-  if (msg.includes('explain') || msg.includes('how does') || msg.includes('what is')) return 'explain';
-  if (msg.includes('design') || msg.includes('architecture') || msg.includes('structure')) return 'design';
-  if (msg.includes('fix') || msg.includes('bug') || msg.includes('error') || msg.includes('broken')) return 'debug';
-  if (msg.includes('add') || msg.includes('create') || msg.includes('write') || msg.includes('implement') || msg.includes('change') || msg.includes('update') || msg.includes('refactor')) return 'code';
+  // ── ERROR / DEBUG ─────────────────────────────────────────────────
+  if (context.consoleErrors?.length || context.buildErrors?.length) {
+    console.log(`[detectMode] → error (errors present)`);
+    return 'error';
+  }
+
+  // ── CODE‑RELATED MODES ───────────────────────────────────────────
+  if (msg.includes('review') || msg.includes('check this code')) {
+    console.log(`[detectMode] → review`);
+    return 'review';
+  }
+  if (msg.includes('explain') || msg.includes('how does') || msg.includes('what is')) {
+    console.log(`[detectMode] → explain`);
+    return 'explain';
+  }
+  if (msg.includes('design') || msg.includes('architecture') || msg.includes('structure')) {
+    console.log(`[detectMode] → design`);
+    return 'design';
+  }
+  if (msg.includes('fix') || msg.includes('bug') || msg.includes('error') || msg.includes('broken')) {
+    console.log(`[detectMode] → debug`);
+    return 'debug';
+  }
+  if (msg.includes('add') || msg.includes('create') || msg.includes('write') || msg.includes('implement') || msg.includes('change') || msg.includes('update') || msg.includes('refactor')) {
+    console.log(`[detectMode] → code`);
+    return 'code';
+  }
+
+  console.log(`[detectMode] → generic (no match)`);
   return 'generic';
 }
 
@@ -132,28 +150,20 @@ function detectMode(userMessage, context = {}) {
 
 const MOCK_RESPONSES = [
   {
-    triggers: ['hello', 'hi', 'hey'],
-    response: `Hello! 👋 I'm your AI coding assistant. I can help you write code, fix bugs, and explain concepts. Tell me what you need and I'll provide the code in an \`edit:\` block – you can copy it or apply it with the "Apply" button.`,
+    triggers: ['hello', 'hi', 'hey', 'how are you', 'good morning', 'howdy'],
+    response: `Hello! 👋 I'm your AI coding assistant. I can help you write code, fix bugs, and explain concepts. Tell me what you need!`,
   },
   {
-    triggers: ['how are you'],
-    response: `I'm doing great, thanks for asking! 😄 How can I help you with your code today?`,
+    triggers: ['who are you', 'what are you', 'what can you do', 'tell me about yourself'],
+    response: `I'm your AI coding assistant, built to help you with software development. I can generate code, debug, review, explain concepts, and design architecture.`,
   },
   {
-    triggers: ['what can you do'],
-    response: `I can help you write code, debug issues, review your code, explain concepts, and even create wireframes! 🚀`,
+    triggers: ['thanks', 'thank you', 'ty', 'thx'],
+    response: `You're welcome! 😊 Let me know if you need anything else.`,
   },
   {
-    triggers: ['who are you'],
-    response: `I'm your AI coding assistant, built to help you with your software development projects! 💻`,
-  },
-  {
-    triggers: ['2 + 2', '2 plus 2'],
+    triggers: ['2 + 2', '2 plus 2', 'math', 'calculate'],
     response: `2 + 2 = 4 🧮`,
-  },
-  {
-    triggers: ['thanks', 'thank you'],
-    response: `You're welcome! 😊 Let me know if you need anything else!`,
   },
 ];
 
@@ -171,7 +181,7 @@ function generateMockResponse(message, projectFiles) {
   const fileCount = Object.keys(projectFiles).length;
   const fileList = Object.keys(projectFiles).slice(0, 3).join(', ');
   return {
-    content: `I can help you with your project (${fileCount} files${fileList ? ` including ${fileList}` : ''}). Tell me what code you need or what problem you're facing.`,
+    content: `I can help you with your project (${fileCount} files${fileList ? ` including ${fileList}` : ''}). Tell me what you need.`,
     model: 'mock-ai',
     provider: 'mock',
   };
@@ -1507,4 +1517,93 @@ export async function testConnection() {
   }
 
   return results;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// WRAPPERS FOR THE AI CONTROLLER
+// ════════════════════════════════════════════════════════════════════
+
+export async function processChat({ messages, model, temperature, maxTokens }) {
+  const result = await callWithFallback(messages, 'openrouter', model);
+  return {
+    text: result.content,
+    model: result.model,
+    usage: result.usage,
+  };
+}
+
+export async function processStream({ messages, model, temperature, maxTokens, onChunk, onComplete }) {
+  try {
+    const result = await streamWithFallback(messages, onChunk, 'openrouter', model);
+    if (onComplete) {
+      onComplete({
+        text: result.content,
+        model: result.model,
+        usage: result.usage,
+      });
+    }
+  } catch (error) {
+    throw error;
+  }
+}
+
+export async function analyzeCode({ code, language, context }) {
+  const prompt = `Analyze the following ${language} code for bugs, security issues, and performance problems. Provide a clear explanation and concrete suggestions.
+  
+Code:
+\`\`\`${language}
+${code}
+\`\`\`
+
+${context ? `Additional context: ${context}` : ''}
+
+Respond with a JSON object: { "analysis": "...", "suggestions": ["...", "..."] }`;
+
+  const messages = [
+    { role: 'system', content: 'You are a senior code analyst. Answer ONLY with valid JSON.' },
+    { role: 'user', content: prompt },
+  ];
+
+  const result = await callWithFallback(messages, 'openrouter');
+  try {
+    const parsed = JSON.parse(result.content);
+    return {
+      analysis: parsed.analysis || result.content,
+      suggestions: parsed.suggestions || [],
+    };
+  } catch {
+    return {
+      analysis: result.content,
+      suggestions: [],
+    };
+  }
+}
+
+export async function explainCode({ code, language, detailLevel }) {
+  const prompt = `Explain the following ${language} code in a way that a developer with ${detailLevel} experience can understand. Include examples if helpful.
+
+\`\`\`${language}
+${code}
+\`\`\`
+
+Respond with a JSON object: { "explanation": "...", "examples": ["..."] }`;
+
+  const messages = [
+    { role: 'system', content: 'You are an expert programming teacher. Answer with clear explanations.' },
+    { role: 'user', content: prompt },
+  ];
+
+  const result = await callWithFallback(messages, 'openrouter');
+  try {
+    const parsed = JSON.parse(result.content);
+    return {
+      explanation: parsed.explanation || result.content,
+      examples: parsed.examples || [],
+    };
+  } catch {
+    return {
+      explanation: result.content,
+      examples: [],
+    };
+  }
 }

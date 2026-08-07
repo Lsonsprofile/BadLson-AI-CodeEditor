@@ -27,6 +27,9 @@ import {
   Copy,
   ClipboardPaste,
   Download,
+  Film,
+  Music,
+  Book,
 } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import {
@@ -40,7 +43,19 @@ import {
 } from '../../lib/fileStorage';
 import JSZip from 'jszip';
 
-// Type declaration for non‑standard input attributes
+// ─── Extensions ─────────────────────────────────────────────────────
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'];
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv'];
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'];
+const DOCUMENT_EXTENSIONS = ['pdf', 'epub', 'mobi'];
+const BINARY_EXTENSIONS = [
+  ...IMAGE_EXTENSIONS,
+  ...VIDEO_EXTENSIONS,
+  ...AUDIO_EXTENSIONS,
+  ...DOCUMENT_EXTENSIONS,
+];
+
+// ─── Type declarations ──────────────────────────────────────────────
 declare module 'react' {
   interface InputHTMLAttributes<T> extends HTMLAttributes<T> {
     webkitdirectory?: string;
@@ -55,11 +70,11 @@ interface TreeNode {
   children: TreeNode[];
   childCount: number;
   depth: number;
-  fileType?: 'text' | 'image' | 'binary';
+  fileType?: 'text' | 'image' | 'video' | 'audio' | 'document' | 'binary';
 }
 
 // ────────────────────────────────────────────────────────────────
-// Build folder tree – determine fileType from extension
+// Build folder tree – now detects more file types
 // ────────────────────────────────────────────────────────────────
 function buildFolderTree(
   filePaths: string[],
@@ -75,10 +90,12 @@ function buildFolderTree(
   const fileSet = new Set(filePaths);
   const allPaths = [...folderPaths, ...filePaths];
 
-  const getFileTypeFromExt = (name: string): 'text' | 'image' | 'binary' => {
+  const getFileTypeFromExt = (name: string): 'text' | 'image' | 'video' | 'audio' | 'document' | 'binary' => {
     const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext))
-      return 'image';
+    if (IMAGE_EXTENSIONS.includes(ext)) return 'image';
+    if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
+    if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
+    if (DOCUMENT_EXTENSIONS.includes(ext)) return 'document';
     return 'text';
   };
 
@@ -152,27 +169,46 @@ function buildFolderTree(
 }
 
 // ────────────────────────────────────────────────────────────────
-// File icon based on extension
+// File icon – now supports audio, PDF, EPUB, etc.
 // ────────────────────────────────────────────────────────────────
 function getFileIcon(name: string) {
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'svg'].includes(ext))
+
+  if (IMAGE_EXTENSIONS.includes(ext)) {
     return <Image className="w-3.5 h-3.5 text-[#d2a8ff] shrink-0" />;
-  if (ext === 'html' || ext === 'htm')
-    return <Layout className="w-3.5 h-3.5 text-[#ff7b72] shrink-0" />;
-  if (ext === 'css')
-    return <Type className="w-3.5 h-3.5 text-[#79c0ff] shrink-0" />;
-  if (ext === 'js' || ext === 'mjs' || ext === 'cjs')
-    return <Braces className="w-3.5 h-3.5 text-[#d2a8ff] shrink-0" />;
-  if (ext === 'ts' || ext === 'tsx')
-    return <FileCode className="w-3.5 h-3.5 text-[#58a6ff] shrink-0" />;
-  if (ext === 'json')
-    return <FileCode className="w-3.5 h-3.5 text-[#7ee787] shrink-0" />;
+  }
+  if (VIDEO_EXTENSIONS.includes(ext)) {
+    return <Film className="w-3.5 h-3.5 text-[#ff7b72] shrink-0" />;
+  }
+  if (AUDIO_EXTENSIONS.includes(ext)) {
+    return <Music className="w-3.5 h-3.5 text-[#7ee787] shrink-0" />;
+  }
+  if (ext === 'pdf') {
+    return <FileText className="w-3.5 h-3.5 text-[#f85149] shrink-0" />;
+  }
+  if (ext === 'epub' || ext === 'mobi') {
+    return <Book className="w-3.5 h-3.5 text-[#e3b341] shrink-0" />;
+  }
+  if (ext === 'html' || ext === 'htm') {
+    return <Layout className="w-3.5 h-3.5 text-[#e34c26] shrink-0" />;
+  }
+  if (ext === 'css') {
+    return <Type className="w-3.5 h-3.5 text-[#264de4] shrink-0" />;
+  }
+  if (ext === 'js' || ext === 'mjs' || ext === 'cjs') {
+    return <Braces className="w-3.5 h-3.5 text-[#f7df1e] shrink-0" />;
+  }
+  if (ext === 'ts' || ext === 'tsx') {
+    return <FileCode className="w-3.5 h-3.5 text-[#007acc] shrink-0" />;
+  }
+  if (ext === 'json') {
+    return <FileCode className="w-3.5 h-3.5 text-[#f5b041] shrink-0" />;
+  }
   return <FileText className="w-3.5 h-3.5 text-[#8b949e] shrink-0" />;
 }
 
 // ────────────────────────────────────────────────────────────────
-// Scroll helpers
+// Scroll helpers (unchanged)
 // ────────────────────────────────────────────────────────────────
 function getVisibleNodesIterative(
   nodes: TreeNode[],
@@ -212,7 +248,7 @@ function buildFolderFileMap(filePaths: string[]): Map<string, string[]> {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Memoized TreeItem
+// Memoized TreeItem (unchanged)
 // ────────────────────────────────────────────────────────────────
 const TreeItem = memo(
   ({
@@ -418,6 +454,7 @@ export default function FileExplorer() {
   }>({ x: 0, y: 0, node: null });
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const singleFileInputRef = useRef<HTMLInputElement>(null); // 👈 for single file import
   const zipInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -470,7 +507,7 @@ export default function FileExplorer() {
   const OVERSCAN = 5;
   const totalHeight = visibleNodes.length * ITEM_HEIGHT;
 
-  // ── Scroll handling (rAF throttled) ──────────────────────────
+  // ── Scroll handling (unchanged) ──────────────────────────────
   const rafIdRef = useRef<number | null>(null);
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -537,7 +574,7 @@ export default function FileExplorer() {
     []
   );
 
-  // ── Tree actions ──────────────────────────────────────────────
+  // ── Tree actions (unchanged) ──────────────────────────────────
   const toggleFolder = useCallback((path: string) => {
     setOpenFolders((prev) => {
       const next = new Set(prev);
@@ -585,6 +622,7 @@ export default function FileExplorer() {
     [folderFileMap]
   );
 
+  // ── Delete (handles video too) ─────────────────────────────────
   const handleDelete = useCallback(
     async (node: TreeNode) => {
       if (node.type === 'folder') {
@@ -603,8 +641,8 @@ export default function FileExplorer() {
       } else {
         if (!window.confirm(`Delete "${node.displayName}"?`)) return;
         const ext = node.name.slice(node.name.lastIndexOf('.') + 1).toLowerCase();
-        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
-        if (isImage) {
+        const isBinary = BINARY_EXTENSIONS.includes(ext);
+        if (isBinary) {
           await deleteBlob(node.name);
         } else {
           await deleteContent(node.name);
@@ -617,7 +655,6 @@ export default function FileExplorer() {
       setContextMenu((prev) => ({ ...prev, node: null }));
     },
     [
-      files,
       closeFile,
       showToast,
       clearSelection,
@@ -639,8 +676,8 @@ export default function FileExplorer() {
     await Promise.all(
       [...selectedFiles].map(async (path) => {
         const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
-        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
-        if (isImage) {
+        const isBinary = BINARY_EXTENSIONS.includes(ext);
+        if (isBinary) {
           await deleteBlob(path);
         } else {
           await deleteContent(path);
@@ -652,8 +689,9 @@ export default function FileExplorer() {
 
     showToast(`Deleted ${selectedFiles.size} file${selectedFiles.size > 1 ? 's' : ''}`, 'info');
     clearSelection();
-  }, [files, selectedFiles, closeFile, showToast, clearSelection, deleteFile]);
+  }, [selectedFiles, closeFile, showToast, clearSelection, deleteFile]);
 
+  // ── Rename (handles video too) ─────────────────────────────────
   const handleRename = useCallback((node: TreeNode) => {
     setRenamingFile(node.name);
     setRenameValue(node.name);
@@ -675,9 +713,9 @@ export default function FileExplorer() {
     }
 
     const ext = renamingFile.slice(renamingFile.lastIndexOf('.') + 1).toLowerCase();
-    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
+    const isBinary = BINARY_EXTENSIONS.includes(ext);
 
-    if (isImage) {
+    if (isBinary) {
       const blob = await getBlob(renamingFile);
       if (blob) {
         await saveBlob(newName, blob);
@@ -715,6 +753,7 @@ export default function FileExplorer() {
     deleteFile,
   ]);
 
+  // ── Create file / folder ─────────────────────────────────────
   const startCreateFile = useCallback((targetFolder: string | null = null) => {
     setNewFileTargetFolder(targetFolder);
     setShowNewFile(true);
@@ -802,7 +841,6 @@ export default function FileExplorer() {
     }
   }, [contextMenu.node, clipboard, showToast]);
 
-  // Unique name generator for paste
   const getUniquePath = (path: string, existingPaths: Set<string>): string => {
     const dotIndex = path.lastIndexOf('.');
     const base = dotIndex > 0 ? path.slice(0, dotIndex) : path;
@@ -825,7 +863,6 @@ export default function FileExplorer() {
 
       const isFolder = folders.includes(srcPath);
       if (isFolder) {
-        // Copy folder recursively
         const childFiles = getAllFilesInNode({
           name: srcPath,
           displayName: srcPath.split('/').pop() || srcPath,
@@ -839,8 +876,8 @@ export default function FileExplorer() {
           const relative = childFile.slice(srcPath.length + 1);
           const newChildPath = `${newPath}/${relative}`;
           const ext = childFile.slice(childFile.lastIndexOf('.') + 1).toLowerCase();
-          const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
-          if (isImage) {
+          const isBinary = BINARY_EXTENSIONS.includes(ext);
+          if (isBinary) {
             const blob = await getBlob(childFile);
             if (blob) {
               await saveBlob(newChildPath, blob);
@@ -858,8 +895,8 @@ export default function FileExplorer() {
         showToast(`Duplicated folder "${srcPath}" as "${newPath}"`, 'success');
       } else {
         const ext = srcPath.slice(srcPath.lastIndexOf('.') + 1).toLowerCase();
-        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
-        if (isImage) {
+        const isBinary = BINARY_EXTENSIONS.includes(ext);
+        if (isBinary) {
           const blob = await getBlob(srcPath);
           if (blob) {
             await saveBlob(newPath, blob);
@@ -894,9 +931,9 @@ export default function FileExplorer() {
       if (node.type !== 'file') return;
       const path = node.name;
       const ext = path.split('.').pop()?.toLowerCase() || '';
-      const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
+      const isBinary = BINARY_EXTENSIONS.includes(ext);
       try {
-        if (isImage) {
+        if (isBinary) {
           const blob = await getBlob(path);
           if (blob) {
             const url = URL.createObjectURL(blob);
@@ -907,7 +944,7 @@ export default function FileExplorer() {
             URL.revokeObjectURL(url);
             showToast(`Downloaded "${node.displayName}"`, 'success');
           } else {
-            showToast('Image not found in storage', 'error');
+            showToast('File not found in storage', 'error');
           }
         } else {
           const content =
@@ -931,15 +968,13 @@ export default function FileExplorer() {
     [files, showToast]
   );
 
-  // ── Folder download (ZIP) – IMPROVED VERSION ──────────────────
+  // ── Folder download (ZIP) – supports videos ────────────────────
   const handleDownloadFolder = useCallback(
     async (node: TreeNode) => {
       if (node.type !== 'folder') return;
 
-      // Get all file paths that belong to this folder (including subfolders)
       const folderPath = node.name;
       const childFiles = fileNames.filter((path) => path.startsWith(folderPath + '/') || path === folderPath);
-      // Exclude the folder itself if it's also listed as a file (shouldn't happen, but safe)
       const filesInFolder = childFiles.filter((p) => p !== folderPath);
 
       if (filesInFolder.length === 0) {
@@ -954,37 +989,34 @@ export default function FileExplorer() {
       const addFileToZip = async (filePath: string) => {
         try {
           const ext = filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase();
-          const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext);
+          const isBinary = BINARY_EXTENSIONS.includes(ext);
 
-          if (isImage) {
+          if (isBinary) {
             const blob = await getBlob(filePath);
             if (blob && blob.size > 0) {
               zip.file(filePath, blob);
-              console.log(`[Download Folder] Added image: ${filePath}`);
+              console.log(`[Download Folder] Added binary: ${filePath}`);
             } else {
-              // Attempt fallback: maybe stored as data URL in files (unlikely)
               const content = (files as Record<string, string>)[filePath];
-              if (content && content.startsWith('data:image')) {
+              if (content && content.startsWith('data:')) {
                 const response = await fetch(content);
                 const fallbackBlob = await response.blob();
                 if (fallbackBlob.size > 0) {
                   zip.file(filePath, fallbackBlob);
-                  console.log(`[Download Folder] Added image (fallback): ${filePath}`);
+                  console.log(`[Download Folder] Added binary (fallback): ${filePath}`);
                   return;
                 }
               }
               failedFiles.push(filePath);
-              console.warn(`[Download Folder] Image not found: ${filePath}`);
+              console.warn(`[Download Folder] Binary not found: ${filePath}`);
             }
           } else {
-            // Text file
             const content =
               (files as Record<string, string>)[filePath] ||
               (await getContent(filePath)) ||
               '';
-            // Always add the file, even if content is empty (empty file)
             zip.file(filePath, content);
-            console.log(`[Download Folder] Added text file: ${filePath} (${content.length} chars)`);
+            console.log(`[Download Folder] Added text: ${filePath} (${content.length} chars)`);
           }
           addedCount++;
         } catch (error) {
@@ -993,7 +1025,6 @@ export default function FileExplorer() {
         }
       };
 
-      // Process in batches to avoid memory issues
       const BATCH_SIZE = 20;
       for (let i = 0; i < filesInFolder.length; i += BATCH_SIZE) {
         const batch = filesInFolder.slice(i, i + BATCH_SIZE);
@@ -1022,10 +1053,11 @@ export default function FileExplorer() {
     [fileNames, files, showToast]
   );
 
-  // ── Import handlers (unchanged) ──────────────────────────────
+  // ─── IMPORT HANDLERS (TWO) ──────────────────────────────────────
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
 
-  const handleImport = useCallback(
+  // ── 1. Import Folder (directory) ──────────────────────────────
+  const handleFolderImport = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const fileList = e.target.files;
       if (!fileList || fileList.length === 0) return;
@@ -1033,215 +1065,139 @@ export default function FileExplorer() {
       const fileArray = Array.from(fileList);
       const totalFiles = fileArray.length;
 
-      const DIRECT_LIMIT = 500;
-      const BATCH_SIZE = 500;
-      const CONCURRENCY = 3;
-      const MAX_RETRIES = 3;
-      const useBatch = totalFiles > DIRECT_LIMIT;
-
-      if (totalFiles > 5000) {
-        if (
-          !window.confirm(
-            `You selected ${totalFiles.toLocaleString()} files.\n\n` +
-              `This will be uploaded in batches of ${BATCH_SIZE} (${Math.ceil(totalFiles / BATCH_SIZE)} batches) to the server.\n` +
-              `It may take several minutes. Continue?`
-          )
-        ) {
-          e.target.value = '';
-          return;
-        }
-      }
-
       setImporting(true);
       setImportProgress({ current: 0, total: totalFiles });
 
       try {
-        if (!useBatch) {
-          const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'ico', 'bmp']);
-          const folderPaths = new Set<string>();
-          let savedCount = 0;
-          const BATCH_UPDATE = 50;
-          let batchFiles: Record<string, string> = {};
-
-          for (let i = 0; i < fileArray.length; i++) {
-            const file = fileArray[i];
-            const path = (file as any).webkitRelativePath || file.name;
-            const ext = path.split('.').pop()?.toLowerCase() || '';
-            const isImage = imageExts.has(ext);
-
-            const parts = path.split('/');
-            let folderPath = '';
-            for (let j = 0; j < parts.length - 1; j++) {
-              folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
-              folderPaths.add(folderPath);
-            }
-
-            if (isImage) {
-              await saveBlob(path, file);
-              batchFiles[path] = '';
-            } else {
-              const content = await file.text();
-              await saveContent(path, content);
-              batchFiles[path] = content;
-            }
-
-            savedCount++;
-
-            if (savedCount % 25 === 0 || savedCount === totalFiles) {
-              setImportProgress({ current: savedCount, total: totalFiles });
-            }
-
-            if (savedCount % BATCH_UPDATE === 0 || savedCount === totalFiles) {
-              const currentFiles = useWorkspaceStore.getState().files;
-              const currentFolders = useWorkspaceStore.getState().folders;
-              const mergedFiles = { ...currentFiles, ...batchFiles };
-              const mergedFolders = [...currentFolders];
-              for (const folder of folderPaths) {
-                if (!mergedFolders.includes(folder)) {
-                  mergedFolders.push(folder);
-                }
-              }
-              useWorkspaceStore.setState({
-                files: mergedFiles,
-                folders: mergedFolders,
-              });
-              batchFiles = {};
-              await new Promise((r) => setTimeout(r, 0));
-            }
-          }
-
-          setImportProgress({ current: savedCount, total: totalFiles });
-          showToast(`Successfully uploaded ${savedCount} files`, 'success');
-          return;
-        }
-
-        const batches: File[][] = [];
-        for (let i = 0; i < totalFiles; i += BATCH_SIZE) {
-          batches.push(fileArray.slice(i, i + BATCH_SIZE));
-        }
-
-        let uploadedCount = 0;
-        const allFileData: any[] = [];
+        const binaryExts = new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS]);
         const folderPaths = new Set<string>();
+        let savedCount = 0;
+        const BATCH_UPDATE = 50;
+        let batchFiles: Record<string, string> = {};
 
-        const uploadBatchWithRetry = async (
-          batch: File[],
-          batchIndex: number,
-          attempt = 1
-        ): Promise<any[]> => {
-          const formData = new FormData();
-          batch.forEach((file) => formData.append('files', file));
-          formData.append('batchNumber', String(batchIndex + 1));
-          formData.append('totalBatches', String(batches.length));
+        for (let i = 0; i < fileArray.length; i++) {
+          const file = fileArray[i];
+          const path = (file as any).webkitRelativePath || file.name;
+          const ext = path.split('.').pop()?.toLowerCase() || '';
+          const isBinary = binaryExts.has(ext);
 
-          try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 60000);
-
-            const response = await fetch(`${API_BASE}/upload/folder-batch`, {
-              method: 'POST',
-              body: formData,
-              signal: controller.signal,
-            });
-
-            clearTimeout(timeoutId);
-
-            if (!response.ok) {
-              const errorText = await response.text();
-              throw new Error(
-                `Batch ${batchIndex + 1} failed (${response.status}): ${errorText || response.statusText}`
-              );
-            }
-
-            const result = await response.json();
-            if (!result.success) {
-              throw new Error(`Batch ${batchIndex + 1} returned success: false`);
-            }
-
-            return result.files || [];
-          } catch (error) {
-            if (attempt < MAX_RETRIES) {
-              const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
-              await new Promise((r) => setTimeout(r, delay));
-              return uploadBatchWithRetry(batch, batchIndex, attempt + 1);
-            }
-            throw error;
+          const parts = path.split('/');
+          let folderPath = '';
+          for (let j = 0; j < parts.length - 1; j++) {
+            folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
+            folderPaths.add(folderPath);
           }
-        };
 
-        const processQueue = async () => {
-          let batchIndex = 0;
-          const running: Promise<void>[] = [];
+          if (isBinary) {
+            await saveBlob(path, file);
+            batchFiles[path] = '';
+            console.log(`[Import Folder] Saved binary: ${path} (${file.size} bytes)`);
+          } else {
+            const content = await file.text();
+            await saveContent(path, content);
+            batchFiles[path] = content;
+            console.log(`[Import Folder] Saved text: ${path} (${content.length} chars)`);
+          }
 
-          const runBatch = async (index: number) => {
-            const batch = batches[index];
-            const files = await uploadBatchWithRetry(batch, index);
-            allFileData.push(...files);
+          savedCount++;
+          if (savedCount % 25 === 0 || savedCount === totalFiles) {
+            setImportProgress({ current: savedCount, total: totalFiles });
+          }
 
-            files.forEach((fileData: any) => {
-              const path = fileData.filename;
-              const parts = path.split('/');
-              let folderPath = '';
-              for (let j = 0; j < parts.length - 1; j++) {
-                folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
-                folderPaths.add(folderPath);
+          if (savedCount % BATCH_UPDATE === 0 || savedCount === totalFiles) {
+            const currentFiles = useWorkspaceStore.getState().files;
+            const currentFolders = useWorkspaceStore.getState().folders;
+            const mergedFiles = { ...currentFiles, ...batchFiles };
+            const mergedFolders = [...currentFolders];
+            for (const folder of folderPaths) {
+              if (!mergedFolders.includes(folder)) {
+                mergedFolders.push(folder);
               }
+            }
+            useWorkspaceStore.setState({
+              files: mergedFiles,
+              folders: mergedFolders,
             });
-
-            uploadedCount += batch.length;
-
-            if (uploadedCount % 25 === 0 || uploadedCount === totalFiles) {
-              setImportProgress({ current: uploadedCount, total: totalFiles });
-            }
-          };
-
-          while (batchIndex < batches.length || running.length > 0) {
-            while (running.length < CONCURRENCY && batchIndex < batches.length) {
-              const currentIndex = batchIndex++;
-              const promise = runBatch(currentIndex).finally(() => {
-                const idx = running.indexOf(promise as any);
-                if (idx > -1) running.splice(idx, 1);
-              });
-              running.push(promise as any);
-            }
-
-            if (running.length > 0) {
-              await Promise.race(running);
-            }
+            batchFiles = {};
+            await new Promise((r) => setTimeout(r, 0));
           }
-        };
-
-        await processQueue();
-
-        setImportProgress({ current: uploadedCount, total: totalFiles });
-
-        const zustandFiles: Record<string, string> = {};
-        for (const fileData of allFileData) {
-          zustandFiles[fileData.filename] = fileData.content || '';
         }
 
-        const currentFiles = useWorkspaceStore.getState().files;
-        const currentFolders = useWorkspaceStore.getState().folders;
-        useWorkspaceStore.setState({
-          files: { ...currentFiles, ...zustandFiles },
-          folders: [...new Set([...currentFolders, ...folderPaths])],
-        });
-
-        showToast(`Uploaded ${uploadedCount} files in ${batches.length} batches`, 'success');
+        setImportProgress({ current: savedCount, total: totalFiles });
+        showToast(`Successfully imported ${savedCount} files from folder`, 'success');
       } catch (error) {
-        showToast(
-          `Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          'error'
-        );
+        showToast(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+        console.error(error);
       } finally {
         setImporting(false);
         setImportProgress({ current: 0, total: 0 });
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     },
-    [showToast, API_BASE]
+    [showToast]
   );
 
+  // ── 2. Import Single File ──────────────────────────────────────
+  const handleSingleFileImport = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const fileList = e.target.files;
+      if (!fileList || fileList.length === 0) return;
+      const file = fileList[0];
+      const path = file.name;
+
+      setImporting(true);
+      setImportProgress({ current: 0, total: 1 });
+
+      try {
+        const ext = path.split('.').pop()?.toLowerCase() || '';
+        const isBinary = BINARY_EXTENSIONS.includes(ext);
+
+        // Determine parent folder (if any)
+        const parts = path.split('/');
+        let folderPath = '';
+        if (parts.length > 1) {
+          for (let j = 0; j < parts.length - 1; j++) {
+            folderPath = folderPath ? `${folderPath}/${parts[j]}` : parts[j];
+          }
+        }
+
+        if (isBinary) {
+          await saveBlob(path, file);
+          console.log(`[Import File] Saved binary: ${path} (${file.size} bytes)`);
+        } else {
+          const content = await file.text();
+          await saveContent(path, content);
+          console.log(`[Import File] Saved text: ${path} (${content.length} chars)`);
+        }
+
+        // Update store
+        const currentFiles = useWorkspaceStore.getState().files;
+        const currentFolders = useWorkspaceStore.getState().folders;
+        const newFiles = { ...currentFiles, [path]: isBinary ? '' : await file.text() };
+        const newFolders = [...currentFolders];
+        if (folderPath && !newFolders.includes(folderPath)) {
+          newFolders.push(folderPath);
+        }
+        useWorkspaceStore.setState({
+          files: newFiles,
+          folders: newFolders,
+        });
+
+        setImportProgress({ current: 1, total: 1 });
+        showToast(`Imported "${path}"`, 'success');
+      } catch (error) {
+        showToast(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+        console.error(error);
+      } finally {
+        setImporting(false);
+        setImportProgress({ current: 0, total: 0 });
+        if (singleFileInputRef.current) singleFileInputRef.current.value = '';
+      }
+    },
+    [showToast]
+  );
+
+  // ── 3. ZIP Upload (unchanged) ──────────────────────────────────
   const handleZipUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const fileList = e.target.files;
@@ -1342,6 +1298,7 @@ export default function FileExplorer() {
   );
   const visibleSlice = visibleNodes.slice(startIndex, endIndex);
 
+  // ─── Render ──────────────────────────────────────────────────────
   return (
     <div className="h-full flex flex-col bg-[#0d1117] min-w-0">
       {/* Toolbar */}
@@ -1377,6 +1334,7 @@ export default function FileExplorer() {
             </>
           )}
 
+          {/* Import Folder (directory) */}
           <button
             onClick={() => fileInputRef.current?.click()}
             className="p-1 hover:bg-[#30363d] rounded transition"
@@ -1384,6 +1342,18 @@ export default function FileExplorer() {
             disabled={importing}
           >
             <Upload
+              className={`w-3.5 h-3.5 ${importing ? 'text-[#58a6ff] animate-pulse' : 'text-[#8b949e] hover:text-[#c9d1d9]'}`}
+            />
+          </button>
+
+          {/* Import File (single) */}
+          <button
+            onClick={() => singleFileInputRef.current?.click()}
+            className="p-1 hover:bg-[#30363d] rounded transition"
+            title="Import File"
+            disabled={importing}
+          >
+            <FilePlus
               className={`w-3.5 h-3.5 ${importing ? 'text-[#58a6ff] animate-pulse' : 'text-[#8b949e] hover:text-[#c9d1d9]'}`}
             />
           </button>
@@ -1433,8 +1403,16 @@ export default function FileExplorer() {
         webkitdirectory=""
         directory=""
         multiple
+        accept="*/*"
         className="hidden"
-        onChange={handleImport}
+        onChange={handleFolderImport}
+      />
+      <input
+        ref={singleFileInputRef}
+        type="file"
+        accept="*/*"
+        className="hidden"
+        onChange={handleSingleFileImport}
       />
       <input
         ref={zipInputRef}
@@ -1627,6 +1605,12 @@ export default function FileExplorer() {
                   className="flex items-center gap-2 px-4 py-2 bg-[#21262d] hover:bg-[#30363d] rounded-md text-[11px] text-[#c9d1d9] transition border border-[#30363d]"
                 >
                   <Upload className="w-4 h-4 text-[#58a6ff]" /> Import Folder
+                </button>
+                <button
+                  onClick={() => singleFileInputRef.current?.click()}
+                  className="flex items-center gap-2 px-4 py-2 bg-[#21262d] hover:bg-[#30363d] rounded-md text-[11px] text-[#c9d1d9] transition border border-[#30363d]"
+                >
+                  <FilePlus className="w-4 h-4 text-[#58a6ff]" /> Import File
                 </button>
                 <button
                   onClick={() => zipInputRef.current?.click()}
