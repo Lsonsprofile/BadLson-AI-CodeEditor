@@ -245,9 +245,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         };
         const css = findFile('style.css');
         const js = findFile('script.js');
-        return html
-          .replace(/<link[^>]*href=["']style\.css["'][^>]*>/i, `<style>${css}</style>`)
-          .replace(/<script[^>]*src=["']script\.js["'][^>]*><\/script>/i, `<script>${js}<\/script>`);
+        let preview = html;
+        const hasStylesheetLink = /<link[^>]*href=["']style\.css["'][^>]*>/i.test(preview);
+        const hasScriptLink = /<script[^>]*src=["']script\.js["'][^>]*><\/script>/i.test(preview);
+
+        if (hasStylesheetLink) {
+          preview = preview.replace(/<link[^>]*href=["']style\.css["'][^>]*>/i, `<style>${css}</style>`);
+        } else if (css) {
+          preview = preview.replace('<head>', `<head><style>${css}</style>`);
+        }
+
+        if (hasScriptLink) {
+          preview = preview.replace(/<script[^>]*src=["']script\.js["'][^>]*><\/script>/i, `<script>${js}<\/script>`);
+        } else if (js) {
+          preview = preview.replace('</body>', `<script>${js}</script></body>`);
+        }
+
+        return preview;
       },
     }),
     {
