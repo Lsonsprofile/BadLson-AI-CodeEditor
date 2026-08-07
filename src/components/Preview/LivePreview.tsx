@@ -230,13 +230,27 @@ export default function LivePreview() {
       if (files[candidate] !== undefined) {
         return candidate;
       }
+
+      const htmlFilesInFolder = Object.keys(files).filter((path) => {
+        if (!path.toLowerCase().endsWith('.html')) return false;
+        return getFolderPath(path) === folder;
+      });
+
+      if (htmlFilesInFolder.length > 0) {
+        return htmlFilesInFolder.sort()[0];
+      }
     }
 
     if (files['index.html'] !== undefined) {
       return 'index.html';
     }
 
-    return Object.keys(files).find((path) => path.endsWith('/index.html')) || '';
+    const anyHtmlFile = Object.keys(files).find((path) => path.toLowerCase().endsWith('.html'));
+    if (anyHtmlFile) {
+      return anyHtmlFile;
+    }
+
+    return '';
   };
 
   const wrapUserScript = (js: string): string => {
@@ -279,10 +293,6 @@ export default function LivePreview() {
     }
     
     const baseFolder = htmlPath ? getFolderPath(htmlPath) : '';
-    let css = await getFileContentAsync('style.css', baseFolder);
-    let js = await getFileContentAsync('script.js', baseFolder);
-
-    js = stripTypeScript(js);
 
     if (!html) {
       return `<!DOCTYPE html>
@@ -316,23 +326,8 @@ export default function LivePreview() {
     }
 
     previewHTML = await inlineLocalStylesheets(previewHTML, baseFolder);
-    
-    if (!hasLinkedStylesheets && css) {
-      const styleTag = `<style>${await rewriteCssAssetUrls(css, baseFolder)}</style>`;
-      if (previewHTML.includes('</head>')) {
-        previewHTML = previewHTML.replace('</head>', styleTag + '</head>');
-      } else {
-        previewHTML = previewHTML.replace('<head>', `<head>${styleTag}`);
-      }
-    }
-
     previewHTML = await inlineLocalScripts(previewHTML, baseFolder);
     previewHTML = await rewriteHtmlSources(previewHTML, baseFolder);
-
-    if (!hasLinkedScripts && js) {
-      const wrappedJS = wrapUserScript(js);
-      previewHTML = previewHTML.replace('</body>', wrappedJS + '</body>');
-    }
 
     if (!previewHTML.includes('<html')) {
       previewHTML = `<!DOCTYPE html><html>${previewHTML}</html>`;

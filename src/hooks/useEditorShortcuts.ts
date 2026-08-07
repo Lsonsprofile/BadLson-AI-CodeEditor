@@ -1,6 +1,6 @@
 // src/hooks/useEditorShortcuts.ts
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor';
 import type { editor as MonacoEditorType } from 'monaco-editor';
 
@@ -15,6 +15,14 @@ export function useEditorShortcuts({
   onSave,
   onFormat,
 }: UseEditorShortcutsOptions) {
+  const onSaveRef = useRef(onSave);
+  const onFormatRef = useRef(onFormat);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+    onFormatRef.current = onFormat;
+  }, [onSave, onFormat]);
+
   useEffect(() => {
     if (!editor) {
       return;
@@ -23,8 +31,7 @@ export function useEditorShortcuts({
     editor.addCommand(
       monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
       () => {
-        onSave?.();
-        window.dispatchEvent(new CustomEvent('save-files'));
+        onSaveRef.current?.();
       }
     );
 
@@ -33,9 +40,8 @@ export function useEditorShortcuts({
         monaco.KeyMod.Alt |
         monaco.KeyCode.KeyF,
       () => {
-        onFormat?.();
-        window.dispatchEvent(new CustomEvent('format-code'));
+        onFormatRef.current?.();
       }
     );
-  }, [editor, onSave, onFormat]);
+  }, [editor]);
 }
