@@ -426,8 +426,8 @@ export default function FileExplorer() {
     deleteFile,
   } = useWorkspaceStore();
 
-  // ── Clipboard state ───────────────────────────────────────────
-  const [clipboard, setClipboard] = useState<string[]>([]);
+  // ── Clipboard state (supports copy or cut/move)
+  const [clipboard, setClipboard] = useState<{ items: string[]; mode: 'copy' | 'cut' }>({ items: [], mode: 'copy' });
 
   // ── UI states ─────────────────────────────────────────────────
   const [newFileName, setNewFileName] = useState('');
@@ -446,6 +446,11 @@ export default function FileExplorer() {
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set(['']));
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+
+  // ── Undo stack (stores recent deletes/moves for undo)
+  type UndoItem = { path: string; isBinary: boolean; content?: string; blob?: Blob };
+  type UndoAction = { kind: 'delete' | 'move'; items: Array<UndoItem & { dest?: string }> };
+  const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
 
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -625,6 +630,7 @@ export default function FileExplorer() {
   // ── Delete (handles video too) ─────────────────────────────────
   const handleDelete = useCallback(
     async (node: TreeNode) => {
+      // capture data for undo
       if (node.type === 'folder') {
         const childFiles = getAllFilesInNode(node);
         const count = childFiles.length;
@@ -635,21 +641,39 @@ export default function FileExplorer() {
         )
           return;
 
+        const items: UndoItem[] = [];
+        for (const file of childFiles) {
+          const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase();
+          const isBinary = BINARY_EXTENSIONS.includes(ext);
+          if (isBinary) {
+            const blob = await getBlob(file);
+            if (blob) items.push({ path: file, isBinary: true, blob });
+          } else {
+            const content = (files as Record<string, string>)[file] || (await getContent(file)) || '';
+            items.push({ path: file, isBinary: false, content });
+          }
+        }
+
         await deleteFolderContents(node.name);
         deleteFolder(node.name);
-        showToast(`Deleted folder "${node.displayName}"`, 'info');
+        setUndoStack((s) => [...s, { kind: 'delete', items }]);
+        showToast(`Deleted folder "${node.displayName}" (undo available)`, 'info');
       } else {
         if (!window.confirm(`Delete "${node.displayName}"?`)) return;
         const ext = node.name.slice(node.name.lastIndexOf('.') + 1).toLowerCase();
         const isBinary = BINARY_EXTENSIONS.includes(ext);
         if (isBinary) {
+          const blob = await getBlob(node.name);
+          if (blob) setUndoStack((s) => [...s, { kind: 'delete', items: [{ path: node.name, isBinary: true, blob }] }]);
           await deleteBlob(node.name);
         } else {
+          const content = (files as Record<string, string>)[node.name] || (await getContent(node.name)) || '';
+          setUndoStack((s) => [...s, { kind: 'delete', items: [{ path: node.name, isBinary: false, content }] }]);
           await deleteContent(node.name);
         }
         deleteFile(node.name);
         closeFile(node.name);
-        showToast(`Deleted "${node.displayName}"`, 'info');
+        showToast(`Deleted "${node.displayName}" (undo available)`, 'info');
       }
       clearSelection();
       setContextMenu((prev) => ({ ...prev, node: null }));
@@ -672,22 +696,25 @@ export default function FileExplorer() {
       )
     )
       return;
+    const items: UndoItem[] = [];
+    for (const path of selectedFiles) {
+      const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+      const isBinary = BINARY_EXTENSIONS.includes(ext);
+      if (isBinary) {
+        const blob = await getBlob(path);
+        if (blob) items.push({ path, isBinary: true, blob });
+        await deleteBlob(path);
+      } else {
+        const content = (files as Record<string, string>)[path] || (await getContent(path)) || '';
+        items.push({ path, isBinary: false, content });
+        await deleteContent(path);
+      }
+      deleteFile(path);
+      closeFile(path);
+    }
 
-    await Promise.all(
-      [...selectedFiles].map(async (path) => {
-        const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
-        const isBinary = BINARY_EXTENSIONS.includes(ext);
-        if (isBinary) {
-          await deleteBlob(path);
-        } else {
-          await deleteContent(path);
-        }
-        deleteFile(path);
-        closeFile(path);
-      })
-    );
-
-    showToast(`Deleted ${selectedFiles.size} file${selectedFiles.size > 1 ? 's' : ''}`, 'info');
+    setUndoStack((s) => [...s, { kind: 'delete', items }]);
+    showToast(`Deleted ${selectedFiles.size} file${selectedFiles.size > 1 ? 's' : ''} (undo available)`, 'info');
     clearSelection();
   }, [selectedFiles, closeFile, showToast, clearSelection, deleteFile]);
 
@@ -835,96 +862,237 @@ export default function FileExplorer() {
   // ── Copy / Paste / Download ──────────────────────────────────
   const handleCopy = useCallback(() => {
     if (contextMenu.node) {
-      setClipboard([...clipboard, contextMenu.node.name]);
+      setClipboard((prev) => ({ items: [...prev.items, contextMenu.node!.name], mode: 'copy' }));
       showToast('Copied to clipboard', 'info');
       setContextMenu((prev) => ({ ...prev, node: null }));
     }
-  }, [contextMenu.node, clipboard, showToast]);
+  }, [contextMenu.node, showToast]);
+
+  const handleCut = useCallback(() => {
+    if (contextMenu.node) {
+      setClipboard({ items: [contextMenu.node.name], mode: 'cut' });
+      showToast('Cut to clipboard (use Paste on a folder)', 'info');
+      setContextMenu((prev) => ({ ...prev, node: null }));
+    }
+  }, [contextMenu.node, showToast]);
 
   const getUniquePath = (path: string, existingPaths: Set<string>): string => {
     const dotIndex = path.lastIndexOf('.');
     const base = dotIndex > 0 ? path.slice(0, dotIndex) : path;
     const ext = dotIndex > 0 ? path.slice(dotIndex) : '';
-    let newPath = `${base} (copy)${ext}`;
     let counter = 1;
+    let newPath = `${base} (${counter})${ext}`;
     while (existingPaths.has(newPath) || fileNames.includes(newPath)) {
-      newPath = `${base} (copy ${counter})${ext}`;
       counter++;
+      newPath = `${base} (${counter})${ext}`;
     }
     return newPath;
   };
 
-  const handlePaste = useCallback(async () => {
-    if (clipboard.length === 0) return;
-    const existingPaths = new Set(fileNames);
-    for (const srcPath of clipboard) {
-      const newPath = getUniquePath(srcPath, existingPaths);
-      existingPaths.add(newPath);
+  const handlePaste = useCallback(
+    async (targetFolder: string | null = null) => {
+      if (!clipboard.items || clipboard.items.length === 0) return;
+      const existingPaths = new Set(fileNames);
 
-      const isFolder = folders.includes(srcPath);
-      if (isFolder) {
-        const childFiles = getAllFilesInNode({
-          name: srcPath,
-          displayName: srcPath.split('/').pop() || srcPath,
-          type: 'folder',
-          children: [],
-          childCount: 0,
-          depth: 0,
-        } as TreeNode);
-        createFolder(newPath);
-        for (const childFile of childFiles) {
-          const relative = childFile.slice(srcPath.length + 1);
-          const newChildPath = `${newPath}/${relative}`;
-          const ext = childFile.slice(childFile.lastIndexOf('.') + 1).toLowerCase();
+      // First pass: detect conflicts
+      const conflicts: Array<{ srcPath: string; intended: string; isFolder: boolean; conflictingPaths?: string[] }> = [];
+      for (const srcPath of clipboard.items) {
+        const baseName = srcPath.split('/').pop() || srcPath;
+        const intended = targetFolder ? `${targetFolder}/${baseName}` : baseName;
+        const isFolder = folders.includes(srcPath);
+
+        // Prevent moving a folder into itself or its descendant
+        if (clipboard.mode === 'cut' && isFolder && targetFolder && (targetFolder === srcPath || targetFolder.startsWith(srcPath + '/'))) {
+          conflicts.push({ srcPath, intended, isFolder, conflictingPaths: ['invalid-destination'] });
+          continue;
+        }
+
+        if (isFolder) {
+          const childFiles = getAllFilesInNode({
+            name: srcPath,
+            displayName: srcPath.split('/').pop() || srcPath,
+            type: 'folder',
+            children: [],
+            childCount: 0,
+            depth: 0,
+          } as TreeNode);
+          const conflictingPaths: string[] = [];
+          for (const childFile of childFiles) {
+            const relative = childFile.slice(srcPath.length + 1);
+            const newChildPath = `${intended}/${relative}`;
+            if (existingPaths.has(newChildPath) || fileNames.includes(newChildPath)) {
+              conflictingPaths.push(newChildPath);
+            }
+          }
+          if (conflictingPaths.length > 0) conflicts.push({ srcPath, intended, isFolder, conflictingPaths });
+        } else {
+          if (existingPaths.has(intended) || fileNames.includes(intended)) conflicts.push({ srcPath, intended, isFolder, conflictingPaths: [intended] });
+        }
+      }
+
+      let overwriteAll = false;
+      let promptEach = true;
+      if (conflicts.length > 0) {
+        overwriteAll = window.confirm(`Found ${conflicts.length} conflicting item(s). Click OK to overwrite all, Cancel to confirm each.`);
+        promptEach = !overwriteAll;
+      }
+
+      const skipped: string[] = [];
+      const movedItems: Array<UndoItem & { dest: string }> = [];
+      const deleteLater: string[] = [];
+
+      // Second pass: perform operations, honoring overwriteAll/promptEach
+      for (const srcPath of clipboard.items) {
+        const baseName = srcPath.split('/').pop() || srcPath;
+        const intended = targetFolder ? `${targetFolder}/${baseName}` : baseName;
+        const isFolder = folders.includes(srcPath);
+
+        const conflictEntry = conflicts.find((c) => c.srcPath === srcPath);
+        if (conflictEntry) {
+          if (!overwriteAll) {
+            const userOk = window.confirm(`Conflict for "${srcPath}" at "${conflictEntry.intended}". Overwrite? OK = Yes, Cancel = No`);
+            if (!userOk) {
+              skipped.push(srcPath);
+              continue;
+            }
+          }
+          // else proceed to overwrite
+        }
+
+        if (isFolder) {
+          const childFiles = getAllFilesInNode({
+            name: srcPath,
+            displayName: srcPath.split('/').pop() || srcPath,
+            type: 'folder',
+            children: [],
+            childCount: 0,
+            depth: 0,
+          } as TreeNode);
+
+          // create destination folder
+          createFolder(intended);
+
+          for (const childFile of childFiles) {
+            const relative = childFile.slice(srcPath.length + 1);
+            const newChildPath = `${intended}/${relative}`;
+            const ext = childFile.slice(childFile.lastIndexOf('.') + 1).toLowerCase();
+            const isBinary = BINARY_EXTENSIONS.includes(ext);
+            if (isBinary) {
+              const blob = await getBlob(childFile);
+                if (blob) {
+                // overwrite by deleting first if exists
+                if (existingPaths.has(newChildPath) || fileNames.includes(newChildPath)) {
+                  await deleteBlob(newChildPath).catch(() => {});
+                }
+                // save destination
+                await saveBlob(newChildPath, blob);
+                updateFile(newChildPath, '');
+                // record moved item original content for undo (blob)
+                if (clipboard.mode === 'cut') movedItems.push({ path: childFile, dest: newChildPath, isBinary: true, blob });
+              }
+              // defer deleting original until after all copies succeed
+              if (clipboard.mode === 'cut') deleteLater.push(childFile);
+            } else {
+              const content =
+                (files as Record<string, string>)[childFile] ||
+                (await getContent(childFile)) ||
+                '';
+              if (existingPaths.has(newChildPath) || fileNames.includes(newChildPath)) {
+                await deleteContent(newChildPath).catch(() => {});
+              }
+              updateFile(newChildPath, content);
+              await saveContent(newChildPath, content);
+              if (clipboard.mode === 'cut') movedItems.push({ path: childFile, dest: newChildPath, isBinary: false, content });
+              // defer deleting original until after all copies succeed
+              if (clipboard.mode === 'cut') deleteLater.push(childFile);
+            }
+            existingPaths.add(newChildPath);
+          }
+
+          // After copying children, if cut -> delete originals for this folder
+          if (clipboard.mode === 'cut') {
+            // delete original files saved in deleteLater that belong to this folder
+            const toDelete = deleteLater.filter((p) => p.startsWith(srcPath + '/') || p === srcPath);
+            for (const d of toDelete) {
+              const ext = d.slice(d.lastIndexOf('.') + 1).toLowerCase();
+              const isB = BINARY_EXTENSIONS.includes(ext);
+              if (isB) await deleteBlob(d).catch(() => {});
+              else await deleteContent(d).catch(() => {});
+              deleteFile(d);
+            }
+            // clear those entries from deleteLater
+            for (const d of toDelete) {
+              const idx = deleteLater.indexOf(d);
+              if (idx >= 0) deleteLater.splice(idx, 1);
+            }
+            // remove folder DB entries and folder state
+            await deleteFolderContents(srcPath);
+            deleteFolder(srcPath);
+          }
+
+          showToast(`${clipboard.mode === 'cut' ? 'Moved' : 'Copied'} folder "${srcPath}" to "${intended}"`, 'success');
+        } else {
+          const ext = srcPath.slice(srcPath.lastIndexOf('.') + 1).toLowerCase();
           const isBinary = BINARY_EXTENSIONS.includes(ext);
           if (isBinary) {
-            const blob = await getBlob(childFile);
+            const blob = await getBlob(srcPath);
             if (blob) {
-              await saveBlob(newChildPath, blob);
-              updateFile(newChildPath, '');
+              if (existingPaths.has(intended) || fileNames.includes(intended)) {
+                await deleteBlob(intended).catch(() => {});
+              }
+              await saveBlob(intended, blob);
+              updateFile(intended, '');
+              if (clipboard.mode === 'cut') movedItems.push({ path: srcPath, dest: intended, isBinary: true, blob });
             }
+            // defer deletion until after copies
+            if (clipboard.mode === 'cut') deleteLater.push(srcPath);
           } else {
             const content =
-              (files as Record<string, string>)[childFile] ||
-              (await getContent(childFile)) ||
+              (files as Record<string, string>)[srcPath] ||
+              (await getContent(srcPath)) ||
               '';
-            updateFile(newChildPath, content);
-            await saveContent(newChildPath, content);
+            if (existingPaths.has(intended) || fileNames.includes(intended)) {
+              await deleteContent(intended).catch(() => {});
+            }
+            updateFile(intended, content);
+            await saveContent(intended, content);
+            if (clipboard.mode === 'cut') movedItems.push({ path: srcPath, dest: intended, isBinary: false, content });
+            if (clipboard.mode === 'cut') deleteLater.push(srcPath);
           }
+          existingPaths.add(intended);
         }
-        showToast(`Duplicated folder "${srcPath}" as "${newPath}"`, 'success');
-      } else {
-        const ext = srcPath.slice(srcPath.lastIndexOf('.') + 1).toLowerCase();
-        const isBinary = BINARY_EXTENSIONS.includes(ext);
-        if (isBinary) {
-          const blob = await getBlob(srcPath);
-          if (blob) {
-            await saveBlob(newPath, blob);
-            updateFile(newPath, '');
-          }
-        } else {
-          const content =
-            (files as Record<string, string>)[srcPath] ||
-            (await getContent(srcPath)) ||
-            '';
-          updateFile(newPath, content);
-          await saveContent(newPath, content);
-        }
-        showToast(`Duplicated "${srcPath}" as "${newPath}"`, 'success');
       }
-    }
-    setClipboard([]);
-    setContextMenu((prev) => ({ ...prev, node: null }));
-  }, [
-    clipboard,
-    fileNames,
-    folders,
-    files,
-    createFolder,
-    updateFile,
-    getAllFilesInNode,
-    showToast,
-  ]);
+
+      if (skipped.length > 0) {
+        showToast(`Skipped ${skipped.length} item(s) due to user choice or invalid destination`, 'info');
+      }
+      // Delete any deferred originals (single files or leftovers)
+      if (clipboard.mode === 'cut' && deleteLater.length > 0) {
+        for (const d of deleteLater) {
+          const ext = d.slice(d.lastIndexOf('.') + 1).toLowerCase();
+          const isB = BINARY_EXTENSIONS.includes(ext);
+          try {
+            if (isB) await deleteBlob(d);
+            else await deleteContent(d);
+          } catch (e) {
+            // ignore errors
+          }
+          deleteFile(d);
+        }
+        // clear deleteLater
+        deleteLater.length = 0;
+      }
+      // Push undo action for moved items
+      if (movedItems.length > 0) {
+        setUndoStack((s) => [...s, { kind: 'move', items: movedItems }]);
+      }
+
+      // If it was a cut, clear clipboard after moving
+      if (clipboard.mode === 'cut') setClipboard({ items: [], mode: 'copy' });
+      setContextMenu((prev) => ({ ...prev, node: null }));
+    },
+    [clipboard, fileNames, folders, files, createFolder, updateFile, getAllFilesInNode, showToast, deleteFolderContents, deleteFolder, deleteFile]
+  );
 
   const handleDownload = useCallback(
     async (node: TreeNode) => {
@@ -1288,6 +1456,64 @@ export default function FileExplorer() {
     [selectedFiles]
   );
 
+  const handleUndo = useCallback(async () => {
+    const stack = [...undoStack];
+    if (stack.length === 0) return;
+    const action = stack.pop()!;
+    setUndoStack(stack);
+
+    if (action.kind === 'delete') {
+      // restore deleted items
+      for (const item of action.items) {
+        // ensure folders exist
+        const parts = item.path.split('/');
+        if (parts.length > 1) {
+          let path = '';
+          for (let i = 0; i < parts.length - 1; i++) {
+            path = path ? `${path}/${parts[i]}` : parts[i];
+            createFolder(path);
+          }
+        }
+
+        if (item.isBinary && item.blob) {
+          await saveBlob(item.path, item.blob);
+          updateFile(item.path, '');
+        } else {
+          await saveContent(item.path, item.content || '');
+          updateFile(item.path, item.content || '');
+        }
+      }
+      showToast('Undo: restored deleted items', 'success');
+    } else if (action.kind === 'move') {
+      // move items back: restore original path from saved content, delete dest
+      for (const it of action.items) {
+        // ensure original folder exists
+        const parts = it.path.split('/');
+        if (parts.length > 1) {
+          let p = '';
+          for (let i = 0; i < parts.length - 1; i++) {
+            p = p ? `${p}/${parts[i]}` : parts[i];
+            createFolder(p);
+          }
+        }
+
+        if (it.isBinary && it.blob) {
+          await saveBlob(it.path, it.blob);
+          updateFile(it.path, '');
+          // remove destination if present
+          if (it.dest) await deleteBlob(it.dest).catch(() => {});
+        } else {
+          await saveContent(it.path, it.content || '');
+          updateFile(it.path, it.content || '');
+          if (it.dest) await deleteContent(it.dest).catch(() => {});
+        }
+        // remove from store dest entry if present
+        if (it.dest) deleteFile(it.dest);
+      }
+      showToast('Undo: moved items restored to original location', 'success');
+    }
+  }, [undoStack, createFolder, saveBlob, saveContent, updateFile, deleteBlob, deleteContent, deleteFile, showToast]);
+
   // Virtual scroll slice
   const scrollTop = scrollTopRef.current;
   const containerHeight = containerHeightRef.current;
@@ -1384,11 +1610,11 @@ export default function FileExplorer() {
             <FolderPlus className="w-3.5 h-3.5 text-[#8b949e] hover:text-[#c9d1d9]" />
           </button>
 
-          {clipboard.length > 0 && (
+          {clipboard.items.length > 0 && (
             <button
-              onClick={handlePaste}
+              onClick={() => handlePaste()}
               className="p-1 hover:bg-[#30363d] rounded transition"
-              title={`Paste ${clipboard.length} item(s)`}
+              title={`Paste ${clipboard.items.length} item(s)`}
             >
               <ClipboardPaste className="w-3.5 h-3.5 text-[#8b949e] hover:text-[#c9d1d9]" />
             </button>
@@ -1485,6 +1711,25 @@ export default function FileExplorer() {
               className="text-[10px] text-[#8b949e] hover:text-[#c9d1d9]"
             >
               Clear
+            </button>
+            <span className="text-[10px] text-[#58a6ff]">|</span>
+            <button
+              onClick={() => {
+                setClipboard({ items: [...selectedFiles], mode: 'cut' });
+                showToast('Cut selected items (right-click target folder and Paste)', 'info');
+              }}
+              className="text-[10px] text-[#58a6ff] hover:underline"
+            >
+              Cut Selected
+            </button>
+            <button
+              onClick={() => {
+                setClipboard({ items: [...selectedFiles], mode: 'copy' });
+                showToast('Copied selected items to clipboard', 'info');
+              }}
+              className="ml-2 text-[10px] text-[#58a6ff] hover:underline"
+            >
+              Copy Selected
             </button>
           </div>
           <span className="text-[10px] text-[#58a6ff] font-medium">
@@ -1660,6 +1905,15 @@ export default function FileExplorer() {
       {/* Footer */}
       <div className="border-t border-[#21262d] bg-[#161b22] shrink-0">
         <div className="flex items-center border-b border-[#21262d]">
+          {undoStack.length > 0 && (
+            <button
+              onClick={handleUndo}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[#58a6ff] hover:text-[#c9d1d9] hover:bg-[#21262d] transition"
+              title={`Undo (${undoStack.length})`}
+            >
+              <X className="w-3 h-3" /> Undo
+            </button>
+          )}
           <button
             onClick={toggleSettings}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition"
@@ -1713,6 +1967,25 @@ export default function FileExplorer() {
               >
                 <Copy className="w-3.5 h-3.5" /> Copy
               </button>
+              <button
+                onClick={() => handleCut()}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+              >
+                <Copy className="w-3.5 h-3.5" /> Cut
+              </button>
+              {clipboard.items.length > 0 && (
+                <button
+                  onClick={() => {
+                    // paste into parent folder of this file
+                    const parts = contextMenu.node!.name.split('/');
+                    const parent = parts.length > 1 ? parts.slice(0, -1).join('/') : null;
+                    handlePaste(parent);
+                  }}
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+                >
+                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste Here
+                </button>
+              )}
             </>
           )}
 
@@ -1739,6 +2012,26 @@ export default function FileExplorer() {
                 <FolderPlus className="w-3.5 h-3.5 text-[#e3b341]" /> New Folder
               </button>
               <div className="h-px bg-[#30363d] my-1" />
+              {clipboard.items.length > 0 && (
+                <button
+                  onClick={() => handlePaste(contextMenu.node!.name)}
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+                >
+                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste Here
+                </button>
+              )}
+              <button
+                onClick={() => handleCopy()}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+              >
+                <Copy className="w-3.5 h-3.5" /> Copy
+              </button>
+              <button
+                onClick={() => handleCut()}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
+              >
+                <Copy className="w-3.5 h-3.5" /> Cut
+              </button>
               <button
                 onClick={() => handleDownloadFolder(contextMenu.node!)}
                 className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
@@ -1755,14 +2048,7 @@ export default function FileExplorer() {
             <Edit3 className="w-3.5 h-3.5" /> Rename
           </button>
 
-          {clipboard.length > 0 && contextMenu.node.type !== 'folder' && (
-            <button
-              onClick={() => handlePaste()}
-              className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"
-            >
-              <ClipboardPaste className="w-3.5 h-3.5" /> Paste
-            </button>
-          )}
+          {/* Paste for non-folder nodes (paste into root or current folder) is available via toolbar paste or folder 'Paste Here' */}
 
           <button
             onClick={() => handleDelete(contextMenu.node!)}
