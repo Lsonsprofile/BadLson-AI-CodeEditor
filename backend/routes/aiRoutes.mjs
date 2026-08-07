@@ -14,7 +14,7 @@ const router = express.Router();
 router.post('/chat', async (req, res) => {
   try {
     const result = await handleChat(req.body);
-    res.json({ success: true, data: result });
+    res.json(result);
   } catch (error) {
     console.error('[AI Route] Chat error:', error.message);
     console.error(error.stack); // log full stack for debugging

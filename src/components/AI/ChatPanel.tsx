@@ -14,6 +14,7 @@ import {
 import { useWorkspaceStore } from '@/store/workspaceStore';
 import { useApiHealth } from '@/hooks/useApiHealth';
 import { PROVIDER_CONFIG, getProviderConfig, type AiProviderKey } from '@/ai/providerConfig';
+import { API_BASE_URL } from '@/services/api';
 
 // ─── TYPES ──────────────────────────────────────────────────────────
 
@@ -424,7 +425,7 @@ export default function ChatPanel() {
       const projectFiles = buildProjectFiles();
       console.log(`📁 Sending ${Object.keys(projectFiles).length} files`);
 
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
+      const API_URL = API_BASE_URL;
       console.log('🌐 Using API URL:', API_URL);
 
       const response = await fetch(`${API_URL}/ai/chat`, {
@@ -452,7 +453,8 @@ export default function ChatPanel() {
         throw new Error(errorText || `HTTP ${response.status}`);
       }
 
-      const data = await response.json() as ChatResponse;
+      const backendResponse = await response.json() as ChatResponse | { success: boolean; data: ChatResponse };
+      const data = (backendResponse as any).data ?? backendResponse;
       console.log('📥 Response:', data);
 
       if (!data.success) {

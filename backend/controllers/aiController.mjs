@@ -311,6 +311,7 @@ export async function handleChat({
     console.log('[AI Controller] 🟢 Greeting detected – returning friendly response.');
     const greetingText = "Hello! 👋 I'm your AI coding assistant. I can help you write code, fix bugs, and explain concepts. Tell me what you need!";
     const result = {
+      success: true,
       content: greetingText,
       message: greetingText,
       response: greetingText,
@@ -379,6 +380,7 @@ export async function handleChat({
   if (mode === 'general') {
     console.log('[AI Controller] General mode – returning response as‑is');
     const result = {
+      success: true,
       content: response.content,
       message: response.content,
       response: response.content,
@@ -454,6 +456,7 @@ You can click **Apply** to add it to your project.`;
 
   const finalResponse = parsed.message || response.content || "I couldn't generate a proper response. Please try again.";
   const result = {
+    success: true,
     content: finalResponse,
     message: finalResponse,
     response: finalResponse,
@@ -506,6 +509,7 @@ export async function handleStream({
     console.log('[AI Controller] 🟢 Stream greeting detected – returning friendly response.');
     const greetingText = "Hello! 👋 I'm your AI coding assistant. I can help you write code, fix bugs, and explain concepts. Tell me what you need!";
     const finalResult = {
+      success: true,
       content: greetingText,
       message: greetingText,
       response: greetingText,
@@ -582,6 +586,7 @@ export async function handleStream({
 
   if (mode === 'general') {
     const finalResult = {
+      success: true,
       content: fullResponse,
       message: fullResponse,
       response: fullResponse,
@@ -647,6 +652,7 @@ You can click **Apply** to add it to your project.`;
 
   const finalResponse = parsed.message || fullResponse || "I couldn't generate a proper response. Please try again.";
   const finalResult = {
+    success: true,
     content: finalResponse,
     message: finalResponse,
     response: finalResponse,
