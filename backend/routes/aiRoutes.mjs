@@ -44,10 +44,10 @@ router.post('/stream', async (req, res) => {
     await handleStream({
       ...req.body,
       onChunk: (chunk) => {
-        res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
       },
       onComplete: (result) => {
-        res.write(`data: ${JSON.stringify({ done: true, ...result })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'done', provider: result.provider, model: result.model, mode: result.mode, done: true })}\n\n`);
         res.end();
       },
     });
@@ -56,7 +56,7 @@ router.post('/stream', async (req, res) => {
     console.error(error.stack);
     const errorMessage = error.message || 'Stream error occurred.';
     // Send error via SSE
-    res.write(`data: ${JSON.stringify({ error: errorMessage, done: true })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage, done: true })}\n\n`);
     res.end();
   }
 });

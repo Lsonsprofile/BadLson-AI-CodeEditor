@@ -152,6 +152,15 @@ interface SSEEvent {
   message?: string;
 }
 
+interface LegacySSEEvent {
+  chunk?: string;
+  done?: boolean;
+  provider?: string;
+  model?: string;
+  error?: string;
+  message?: string;
+}
+
 async function parseSSEStream(
   response: Response,
   onChunk: (chunk: AIStreamChunk) => void
@@ -218,27 +227,39 @@ async function parseSSEStream(
         console.log('[AIClient] 📨 SSE data line:', dataLine.substring(0, 100));
 
         try {
-          const parsed: SSEEvent = JSON.parse(dataLine);
-          console.log('[AIClient] ✅ Parsed SSE event type:', parsed.type);
+          const parsed = JSON.parse(dataLine) as SSEEvent | LegacySSEEvent;
+          console.log('[AIClient] ✅ Parsed SSE event type:', (parsed as SSEEvent).type ?? 'legacy');
 
-          if (parsed.type === 'chunk' && parsed.content !== undefined) {
-            // Handle content chunk
-            if (parsed.content) {
-              fullText += parsed.content;
+          if ((parsed as SSEEvent).type === 'chunk' && (parsed as SSEEvent).content !== undefined) {
+            const content = (parsed as SSEEvent).content;
+            if (content) {
+              fullText += content;
               hasReceivedContent = true;
-              console.log('[AIClient] 📝 Content chunk received, length:', parsed.content.length, 'total:', fullText.length);
+              console.log('[AIClient] 📝 Content chunk received, length:', content.length, 'total:', fullText.length);
               
               onChunk({
                 id: `chunk-${chunkId++}`,
-                content: parsed.content,
+                content,
                 done: false,
               });
             } else {
               console.log('[AIClient] ⚠️ Empty content chunk received');
             }
-          } else if (parsed.type === 'done') {
-            metadata.provider = parsed.provider ?? metadata.provider;
-            metadata.model = parsed.model ?? metadata.model;
+          } else if ((parsed as LegacySSEEvent).chunk !== undefined) {
+            const content = String((parsed as LegacySSEEvent).chunk);
+            if (content) {
+              fullText += content;
+              hasReceivedContent = true;
+              console.log('[AIClient] 📝 Legacy chunk received, length:', content.length, 'total:', fullText.length);
+              onChunk({
+                id: `chunk-${chunkId++}`,
+                content,
+                done: false,
+              });
+            }
+          } else if ((parsed as SSEEvent).type === 'done' || (parsed as LegacySSEEvent).done === true) {
+            metadata.provider = (parsed as SSEEvent).provider ?? (parsed as LegacySSEEvent).provider ?? metadata.provider;
+            metadata.model = (parsed as SSEEvent).model ?? (parsed as LegacySSEEvent).model ?? metadata.model;
             console.log('[AIClient] 🏁 Done event received, provider:', metadata.provider);
             
             onChunk({
@@ -246,13 +267,14 @@ async function parseSSEStream(
               content: '',
               done: true,
             });
-          } else if (parsed.type === 'info') {
-            console.log('[AIClient] ℹ️ Info event received:', parsed.message);
-          } else if (parsed.type === 'error') {
-            console.error('[AIClient] ❌ Error event:', parsed.error);
-            throw new Error(parsed.error || 'Unknown streaming error');
+          } else if ((parsed as SSEEvent).type === 'info') {
+            console.log('[AIClient] ℹ️ Info event received:', (parsed as SSEEvent).message);
+          } else if ((parsed as SSEEvent).type === 'error' || (parsed as LegacySSEEvent).error) {
+            const errorMessage = (parsed as SSEEvent).error ?? (parsed as LegacySSEEvent).error;
+            console.error('[AIClient] ❌ Error event:', errorMessage || (parsed as SSEEvent).type);
+            throw new Error(errorMessage || 'Unknown streaming error');
           } else {
-            console.log('[AIClient] 🤔 Unknown event type:', parsed.type);
+            console.log('[AIClient] 🤔 Unknown event type:', (parsed as SSEEvent).type ?? JSON.stringify(parsed));
           }
         } catch (parseError) {
           console.warn('[AIClient] ⚠️ Failed to parse SSE data:', dataLine, parseError);
