@@ -3,13 +3,18 @@ import { getContent } from '../lib/fileStorage';
 import { useWorkspaceStore } from '../store/workspaceStore';
 
 // ─── API BASE URL ──────────────────────────────────────────────────
-// ✅ FIXED: Use environment variable with proper fallback
-const API_BASE_URL = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL
-  : import.meta.env.DEV
-    ? 'http://localhost:5002/api'
-    : 'https://badlson-backend.onrender.com/api'; // ✅ Production fallback
+function resolveApiBase(): string {
+  const raw = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  if (raw) {
+    let base = raw.replace(/\/$/, '');
+    if (!base.endsWith('/api')) base = `${base}/api`;
+    return base;
+  }
+  if (import.meta.env.DEV) return '/api';
+  return 'https://badlson-backend.onrender.com/api';
+}
 
+const API_BASE_URL = resolveApiBase();
 console.log('🔗 API_BASE_URL:', API_BASE_URL);
 
 // Export for use in other files
@@ -387,10 +392,8 @@ export async function sendChatMessageWithStore(
   cursorPosition?: CursorPosition | null
 ): Promise<ChatApiResponse> {
   const projectFiles = await buildProjectFilesFromStore();
-  
   const consoleErrors = getRecentConsoleErrors();
   const buildErrors = getRecentBuildErrors();
-  
   const state = useWorkspaceStore.getState();
   const recentFiles = state.openFiles.slice(-5);
 
@@ -583,10 +586,8 @@ export async function streamChatMessageWithStore(
   cursorPosition?: CursorPosition | null
 ): Promise<void> {
   const projectFiles = await buildProjectFilesFromStore();
-  
   const consoleErrors = getRecentConsoleErrors();
   const buildErrors = getRecentBuildErrors();
-  
   const state = useWorkspaceStore.getState();
   const recentFiles = state.openFiles.slice(-5);
 
@@ -686,67 +687,6 @@ export async function uploadFile(file: File): Promise<ApiResponse> {
     }
     throw new Error('Upload failed');
   }
+
   return response.json();
-}
-
-export async function uploadZip(file: File): Promise<ApiResponse> {
-  const formData = new FormData();
-  formData.append('zip', file);
-
-  const token = getAuthToken();
-  const headers: HeadersInit = {};
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${API_BASE_URL}/upload/zip`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  });
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      setAuthToken(null);
-      throw new Error('Authentication required. Please log in.');
-    }
-    throw new Error('ZIP upload failed');
-  }
-  return response.json();
-}
-
-export async function uploadLargeFolder(files: File[]): Promise<ApiResponse> {
-  const formData = new FormData();
-  
-  console.log(`📁 Preparing to upload ${files.length} files...`);
-  
-  files.forEach((file) => {
-    formData.append('files', file);
-  });
-
-  const token = getAuthToken();
-  const headers: HeadersInit = {};
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${API_BASE_URL}/upload/folder`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  });
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      setAuthToken(null);
-      throw new Error('Authentication required. Please log in.');
-    }
-    const error = await response.json();
-    throw new Error(error.error || 'Folder upload failed');
-  }
-  
-  const result = await response.json();
-  console.log(`Upload complete: ${result.count || result.files?.length || 0} files`);
-  
-  return result;
 }
