@@ -22,10 +22,21 @@ export interface UseApiHealthReturn {
   isPolling: boolean;
 }
 
+function resolveApiBase(): string {
+  const envUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  if (envUrl) {
+    let base = envUrl.replace(/\/$/, '');
+    if (!base.endsWith('/api')) base = `${base}/api`;
+    return base;
+  }
+  // Dev: relative /api so Vite proxy forwards to localhost:5002
+  if (import.meta.env.DEV) return '/api';
+  return 'https://badlson-backend.onrender.com/api';
+}
+
 export function useApiHealth(options: UseApiHealthOptions = {}): UseApiHealthReturn {
-  // ✅ FIXED: Get VITE_API_URL from import.meta.env
-  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5002/api';
-  
+  const apiBaseUrl = resolveApiBase();
+
   const {
     healthUrl = `${apiBaseUrl}/health`,
     pollingInterval = 30000,
@@ -59,7 +70,7 @@ export function useApiHealth(options: UseApiHealthOptions = {}): UseApiHealthRet
         method: 'GET',
         signal: abortControllerRef.current.signal,
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
         },
       });
 
@@ -123,6 +134,7 @@ export function useApiHealth(options: UseApiHealthOptions = {}): UseApiHealthRet
     return () => {
       stopPolling();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
