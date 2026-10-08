@@ -7,10 +7,6 @@ import {
   applyEdits,
 } from '../services/aiService.mjs';
 
-/**
- * Handle a normal (non-streaming) chat request.
- * Returns a consistent shape the frontend expects.
- */
 export async function handleChat({
   message,
   projectFiles = {},
@@ -28,7 +24,6 @@ export async function handleChat({
     `[AI Controller] handleChat | msg="${(message || '').substring(0, 60)}" | files=${Object.keys(projectFiles).length} | provider=${provider}`
   );
 
-  // Quick greeting short-circuit (no API call)
   const trimmed = (message || '').trim().toLowerCase();
   const isGreeting =
     /^(hello|hi|hey|howdy|good morning|good afternoon|good evening|what's up|sup|yo|greetings)[!?.]*$/i.test(
@@ -50,7 +45,6 @@ export async function handleChat({
     };
   }
 
-  // Build messages + detect mode
   const { messages, mode } = buildPrompt(projectFiles, message, {
     activeFile,
     recentFiles,
@@ -61,7 +55,6 @@ export async function handleChat({
     chatHistory,
   });
 
-  // Call provider with fallback
   let response;
   try {
     response = await callWithFallback(messages, provider, preferredModel, projectFiles);
@@ -88,26 +81,13 @@ export async function handleChat({
     };
   }
 
-  // General conversation → return model text as-is (do NOT force code edits)
-  if (mode === 'general') {
-    return {
-      success: true,
-      content: response.content,
-      message: response.content,
-      response: response.content,
-      provider: response.provider,
-      model: response.model,
-      mode: 'general',
-      edits: { applied: [], failed: [] },
-      timestamp: new Date().toISOString(),
-    };
-  }
-
-  // Code-related modes: parse edit blocks and apply if present
+  // Always try to parse code from the response (even for near-general modes),
+  // so "write a button" / "create a file" still lands in the workspace.
   const parsed = parseAiResponse(response.content);
   let updatedFiles = {};
   let appliedEdits = [];
   let failedEdits = [];
+  const changedOnly = {};
 
   if (
     (parsed.edits && parsed.edits.length > 0) ||
@@ -124,8 +104,28 @@ export async function handleChat({
     failedEdits = result.failed;
   }
 
-  // IMPORTANT: Do NOT invent default templates when the model didn't emit edits.
-  // Just return the model's natural answer.
+  for (const [filename, content] of Object.entries(updatedFiles)) {
+    if (projectFiles[filename] !== content) {
+      changedOnly[filename] = content;
+    }
+  }
+
+  // Pure general chat with no code → return text only
+  if (mode === 'general' && Object.keys(changedOnly).length === 0) {
+    return {
+      success: true,
+      content: response.content,
+      message: response.content,
+      response: response.content,
+      rawContent: response.content,
+      provider: response.provider,
+      model: response.model,
+      mode: 'general',
+      edits: { applied: [], failed: [] },
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   const finalResponse =
     parsed.message ||
     response.content ||
@@ -136,6 +136,7 @@ export async function handleChat({
     content: finalResponse,
     message: finalResponse,
     response: finalResponse,
+    rawContent: response.content,
     provider: response.provider,
     model: response.model,
     mode: parsed.mode || mode,
@@ -144,7 +145,7 @@ export async function handleChat({
       failed: failedEdits,
     },
     updatedFiles:
-      Object.keys(updatedFiles).length > 0 ? updatedFiles : undefined,
+      Object.keys(changedOnly).length > 0 ? changedOnly : undefined,
     wireframes:
       parsed.wireframes && parsed.wireframes.length > 0
         ? parsed.wireframes
@@ -158,9 +159,6 @@ export async function handleChat({
   };
 }
 
-/**
- * Streaming chat (SSE). Used by some clients; non-streaming is the main path.
- */
 export async function handleStream({
   message,
   projectFiles = {},
