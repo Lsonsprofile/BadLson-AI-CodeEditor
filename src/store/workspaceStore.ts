@@ -65,15 +65,114 @@ export interface WorkspaceState {
   getPreviewContent: () => string;
 }
 
-const defaultFiles: Record<string, string> = {};
+const defaultFiles: Record<string, string> = {
+  'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Badson Demo</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="hero">
+      <h1>Welcome to <span class="accent">Badson</span></h1>
+      <p>Your AI-powered code editor. Edit this page and watch the preview update live.</p>
+      <button id="cta" class="btn">Click me</button>
+    </header>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+  'style.css': `* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  background: linear-gradient(135deg, #0b0f19 0%, #1a1f35 100%);
+  color: #e2e8f0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.container {
+  max-width: 640px;
+  padding: 2rem;
+  text-align: center;
+}
+
+.hero h1 {
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.accent {
+  background: linear-gradient(90deg, #818cf8, #c084fc);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero p {
+  color: #94a3b8;
+  font-size: 1.1rem;
+  line-height: 1.6;
+  margin-bottom: 2rem;
+}
+
+.btn {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  border: none;
+  padding: 0.85rem 1.75rem;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.35);
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(99, 102, 241, 0.45);
+}
+
+.btn:active {
+  transform: translateY(0);
+}`,
+  'script.js': `const btn = document.getElementById('cta');
+let clicks = 0;
+
+btn.addEventListener('click', () => {
+  clicks++;
+  btn.textContent = clicks === 1 ? 'Nice! Click again' : \`Clicked \${clicks} times\`;
+  
+  // Fun little animation
+  btn.style.transform = 'scale(0.95)';
+  setTimeout(() => {
+    btn.style.transform = '';
+  }, 100);
+});
+
+console.log('🚀 Badson demo script loaded');`,
+};
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => ({
-      files: {},
+      files: { ...defaultFiles },
       folders: [],
-      activeFile: '',
-      openFiles: [],
+      activeFile: 'index.html',
+      openFiles: ['index.html', 'style.css', 'script.js'],
       sidebarVisible: true,
       aiPanelVisible: true,
       previewDevice: 'desktop',
@@ -206,12 +305,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const newFolders = state.folders.filter((f) => f !== folderPath);
           const newFiles = { ...state.files };
           Object.keys(newFiles).forEach((file) => {
-            if (file === folderPath || file.startsWith(`${folderPath}/`)) {
+            if (file === folderPath || file.startsWith(\`\${folderPath}/\`)) {
               delete newFiles[file];
             }
           });
-          const newOpenFiles = state.openFiles.filter((f) => !f.startsWith(`${folderPath}/`) && f !== folderPath);
-          const newActiveFile = state.activeFile.startsWith(`${folderPath}/`) || state.activeFile === folderPath
+          const newOpenFiles = state.openFiles.filter((f) => !f.startsWith(\`\${folderPath}/\`) && f !== folderPath);
+          const newActiveFile = state.activeFile.startsWith(\`\${folderPath}/\`) || state.activeFile === folderPath
             ? newOpenFiles[newOpenFiles.length - 1] || ''
             : state.activeFile;
           return {
@@ -223,10 +322,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }),
       resetFiles: () =>
         set({
-          files: {},
+          files: { ...defaultFiles },
           folders: [],
-          activeFile: '',
-          openFiles: [],
+          activeFile: 'index.html',
+          openFiles: ['index.html', 'style.css', 'script.js'],
         }),
       getPreviewContent: () => {
         const state = get();
@@ -239,26 +338,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ? htmlPath.substring(0, htmlPath.lastIndexOf('/') + 1) 
           : '';
         const findFile = (name: string) => {
-          const sameFolder = state.files[`${basePath}${name}`];
+          const sameFolder = state.files[\`\${basePath}\${name}\`];
           if (sameFolder) return sameFolder;
           return state.files[name] || '';
         };
         const css = findFile('style.css');
         const js = findFile('script.js');
         let preview = html;
-        const hasStylesheetLink = /<link[^>]*href=["']style\.css["'][^>]*>/i.test(preview);
-        const hasScriptLink = /<script[^>]*src=["']script\.js["'][^>]*><\/script>/i.test(preview);
+        const hasStylesheetLink = /<link[^>]*href=[\"']style\\.css[\"'][^>]*>/i.test(preview);
+        const hasScriptLink = /<script[^>]*src=[\"']script\\.js[\"'][^>]*><\\/script>/i.test(preview);
 
         if (hasStylesheetLink) {
-          preview = preview.replace(/<link[^>]*href=["']style\.css["'][^>]*>/i, `<style>${css}</style>`);
+          preview = preview.replace(/<link[^>]*href=[\"']style\\.css[\"'][^>]*>/i, \`<style>\${css}</style>\`);
         } else if (css) {
-          preview = preview.replace('<head>', `<head><style>${css}</style>`);
+          preview = preview.replace('<head>', \`<head><style>\${css}</style>\`);
         }
 
         if (hasScriptLink) {
-          preview = preview.replace(/<script[^>]*src=["']script\.js["'][^>]*><\/script>/i, `<script>${js}<\/script>`);
+          preview = preview.replace(/<script[^>]*src=[\"']script\\.js[\"'][^>]*><\\/script>/i, \`<script>\${js}<\\/script>\`);
         } else if (js) {
-          preview = preview.replace('</body>', `<script>${js}</script></body>`);
+          preview = preview.replace('</body>', \`<script>\${js}</script></body>\`);
         }
 
         return preview;
