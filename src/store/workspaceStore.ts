@@ -54,7 +54,7 @@ export interface WorkspaceState {
   setProjects: (projects: any[]) => void;
   setAuthUser: (user: WorkspaceState['authUser']) => void;
   setWorkspaceState: (workspaceState: Partial<WorkspaceState>) => void;
-  addChatMessage: (role: string; content: string) => void;
+  addChatMessage: (role: string, content: string) => void;
   addMessage: (message: { role: string; content: string; timestamp?: number }) => void;
   setIsAiTyping: (typing: boolean) => void;
   clearChat: () => void;
