@@ -81,8 +81,6 @@ export async function handleChat({
     };
   }
 
-  // Always try to parse code from the response (even for near-general modes),
-  // so "write a button" / "create a file" still lands in the workspace.
   const parsed = parseAiResponse(response.content);
   let updatedFiles = {};
   let appliedEdits = [];
@@ -110,7 +108,6 @@ export async function handleChat({
     }
   }
 
-  // Pure general chat with no code → return text only
   if (mode === 'general' && Object.keys(changedOnly).length === 0) {
     return {
       success: true,
@@ -126,16 +123,17 @@ export async function handleChat({
     };
   }
 
-  const finalResponse =
-    parsed.message ||
+  // Keep full model output (with code fences) so the chat UI can show the code.
+  const fullText =
     response.content ||
+    parsed.message ||
     "I couldn't generate a proper response. Please try again.";
 
   return {
     success: true,
-    content: finalResponse,
-    message: finalResponse,
-    response: finalResponse,
+    content: fullText,
+    message: fullText,
+    response: fullText,
     rawContent: response.content,
     provider: response.provider,
     model: response.model,
@@ -174,10 +172,6 @@ export async function handleStream({
   onChunk,
   onComplete,
 }) {
-  console.log(
-    `[AI Controller] handleStream | msg="${(message || '').substring(0, 60)}"`
-  );
-
   const trimmed = (message || '').trim().toLowerCase();
   const isGreeting =
     /^(hello|hi|hey|howdy|good morning|good afternoon|good evening|what's up|sup|yo|greetings)[!?.]*$/i.test(
