@@ -46,7 +46,7 @@ function StatusBar() {
       <div className="flex items-center gap-3">
         {sidebarVisible && <span>Explorer</span>}
         {aiPanelVisible && <span className="text-violet-400">AI Active</span>}
-        <span>AI Code Workspace v1.0</span>
+        <span>Badson AI Code Editor</span>
       </div>
     </footer>
   );
