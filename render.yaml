@@ -35,4 +35,4 @@ services:
     rootDir: .
     envVars:
       - key: VITE_API_URL
-        value: https://badlson-backend.onrender.com/api
+        value: https://badlson-backend.onrender.com

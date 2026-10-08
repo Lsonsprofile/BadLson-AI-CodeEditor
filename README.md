@@ -1,191 +1,107 @@
-# BadLson Code Editor
+# Badson AI Code Editor
 
-BadLson is a personal AI-powered code editor designed to make web development faster, smarter, and more interactive. It combines a multi-pane coding environment with an AI coding assistant that helps developers write, understand, debug, and improve their code.
+A modern, AI-powered code editor built for web development. Write HTML, CSS, and JavaScript with live preview and an intelligent AI assistant that can read and edit your files.
+
+![Badson Logo](public/images/badson-logo.png)
 
 ## Features
 
-### Multi-Pane Code Editor
+- **Monaco Editor** — The same powerful editor that powers VS Code
+- **Multi-file workspace** — Tabs, file explorer, create/delete files & folders
+- **Live Preview** — Instant preview of your HTML/CSS/JS
+- **AI Coding Assistant** — Chat with context of your project files
+  - Supports **OpenRouter**, **Groq**, and **Gemini**
+  - AI can suggest and apply edits to your files
+- **Modern dark UI** — Clean, focused interface
+- **Local + Deployed** — Works locally and on Render
 
-BadLson provides separate coding spaces for:
+## Quick Start (Local)
 
-* **HTML Editor** — Write and structure your webpage markup.
-* **CSS Editor** — Design and style your interface.
-* **JavaScript Editor** — Add functionality and interactions.
+### Prerequisites
+- Node.js 18+
+- npm 9+
 
-### AI Coding Assistant
-
-Built-in chat assistance helps you:
-
-* Understand your code
-* Find and fix errors
-* Improve your implementation
-* Get coding suggestions
-* Learn programming concepts while building
-
-### Live Preview
-
-See your changes instantly as you write code with a real-time preview environment.
-
-### Responsive Interface
-
-BadLson adapts across devices, providing a smooth coding experience on desktop and mobile screens.
-
-### Developer-Friendly Workspace
-
-Designed with a clean layout for:
-
-* Writing code
-* Testing ideas
-* Experimenting with designs
-* Learning web development
-
-## Why BadLson?
-
-Traditional code editors can feel overwhelming for beginners and slow down quick experimentation. BadLson combines coding and AI assistance in one workspace, helping developers focus more on creating and less on searching for solutions.
-
-## Project Goals
-
-BadLson aims to become a simple but powerful coding companion that helps developers:
-
-* Build websites faster
-* Learn through interaction
-* Debug problems easily
-* Improve coding skills
-
-## Technologies
-
-(Add your technologies here)
-
-Example:
-
-* HTML
-* CSS
-* JavaScript
-* AI API integration
-* Code editor framework
-
-## Installation
-
-Clone the repository:
+### 1. Install dependencies
 
 ```bash
-git clone https://github.com/yourusername/badlson.git
+npm install
 ```
 
-Open the project folder:
+This also installs backend dependencies automatically.
 
+### 2. Configure API keys (optional but recommended)
+
+Create `backend/.env`:
+
+```env
+PORT=5002
+JWT_SECRET=dev-secret-change-me
+OPENROUTER_API_KEY=your_key_here
+GROQ_API_KEY=your_key_here
+GEMINI_API_KEY=your_key_here
+FRONTEND_URL=http://localhost:3000
+```
+
+You only need **one** provider key for AI to work.
+
+### 3. Run the app
+
+**Terminal 1 — Backend**
 ```bash
-cd badlson
+npm run server:dev
 ```
 
-Run the project using your preferred development environment.
+**Terminal 2 — Frontend**
+```bash
+npm run dev
+```
 
-## Usage
+Open **http://localhost:3000**
 
-1. Open BadLson.
-2. Write or paste your HTML, CSS, and JavaScript code.
-3. Use the AI assistant to ask questions or improve your code.
-4. Preview your project instantly.
+> AI endpoints are public (no login required for basic chat). Auth is only needed for uploads/projects.
 
-## Future Improvements
+## Production (Render)
 
-Planned features:
+The repo includes a `render.yaml` for easy deployment:
 
-* More programming language support
-* Advanced AI debugging
-* Code autocomplete
-* Project file management
-* Extensions/plugins support
-* Cloud project saving
+- `badlson-backend` — Node API
+- `badlson-frontend` — Static site
 
-## Contributing
+Set the environment variables in the Render dashboard:
+- `OPENROUTER_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY`
+- `FRONTEND_URL` = your frontend URL
+- `VITE_API_URL` = your backend URL (without `/api` suffix)
 
-Contributions, suggestions, and ideas are welcome.
+## Tech Stack
 
-If you would like to improve BadLson:
+| Layer     | Tech                                      |
+|-----------|-------------------------------------------|
+| Frontend  | React 19, TypeScript, Vite, Tailwind, Monaco |
+| State     | Zustand                                   |
+| Backend   | Express 5, Node.js                        |
+| AI        | OpenRouter · Groq · Gemini                |
 
-1. Fork the repository
-2. Create a new branch
-3. Make your changes
-4. Submit a pull request
+## Project Structure
+
+```
+├── src/                  # Frontend React app
+│   ├── components/       # UI components
+│   ├── Editor/           # Monaco editor + tabs
+│   ├── ai/               # AI client & config
+│   ├── store/            # Zustand stores
+│   └── ...
+├── backend/              # Express API
+│   ├── routes/
+│   ├── services/         # AI providers
+│   └── server.mjs
+├── public/
+└── render.yaml
+```
 
 ## License
 
-This project is licensed under the MIT License.
+MIT
 
 ---
 
 Made with ❤️ for developers who want a smarter way to code.
-# React + TypeScript + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
