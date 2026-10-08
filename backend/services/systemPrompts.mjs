@@ -57,5 +57,6 @@ export const MODE_PROMPTS = {
   explain: `${BASE_SYSTEM}\n\nMODE: EXPLANATION\nExplain clearly. Only use edit blocks if the user asks for code changes.`,
   design: `${BASE_SYSTEM}\n\nMODE: ARCHITECTURE/DESIGN\nExplain tradeoffs. Write full code only if asked.`,
   error: `${BASE_SYSTEM}\n\nMODE: ERROR RESPONSE\nDiagnose the error, then provide a full-file fix with \`\`\`edit:path.`,
+  general: GENERAL_PERSONALITY,
   generic: BASE_SYSTEM,
 };
