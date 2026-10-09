@@ -31,7 +31,7 @@ export async function handleChat({
     );
   if (isGreeting) {
     const greetingText =
-      "Hello! I'm your AI coding assistant. I can help you write code, fix bugs, and explain concepts. What do you need?";
+      "Hello! I'm your AI coding assistant. Use @fix, @create, or @bug to control how code is applied. What do you need?";
     return {
       success: true,
       content: greetingText,
@@ -87,9 +87,13 @@ export async function handleChat({
   let failedEdits = [];
   const changedOnly = {};
 
+  // @fix / explain / general: never auto-apply file changes
+  const skipApply = mode === 'fix' || mode === 'explain' || mode === 'general';
+
   if (
-    (parsed.edits && parsed.edits.length > 0) ||
-    (parsed.patches && parsed.patches.length > 0)
+    !skipApply &&
+    ((parsed.edits && parsed.edits.length > 0) ||
+      (parsed.patches && parsed.patches.length > 0))
   ) {
     const result = applyEdits(
       projectFiles,
@@ -123,7 +127,6 @@ export async function handleChat({
     };
   }
 
-  // Keep full model output (with code fences) so the chat UI can show the code.
   const fullText =
     response.content ||
     parsed.message ||
@@ -157,95 +160,7 @@ export async function handleChat({
   };
 }
 
-export async function handleStream({
-  message,
-  projectFiles = {},
-  chatHistory = [],
-  provider = 'openrouter',
-  preferredModel = null,
-  activeFile = null,
-  recentFiles = [],
-  consoleErrors = [],
-  buildErrors = [],
-  selectedCode = null,
-  cursorPosition = null,
-  onChunk,
-  onComplete,
-}) {
-  const trimmed = (message || '').trim().toLowerCase();
-  const isGreeting =
-    /^(hello|hi|hey|howdy|good morning|good afternoon|good evening|what's up|sup|yo|greetings)[!?.]*$/i.test(
-      trimmed
-    );
-  if (isGreeting) {
-    const greetingText =
-      "Hello! I'm your AI coding assistant. I can help you write code, fix bugs, and explain concepts. What do you need?";
-    if (onChunk) onChunk(greetingText);
-    if (onComplete) {
-      onComplete({
-        success: true,
-        content: greetingText,
-        response: greetingText,
-        provider: 'system',
-        model: 'greeting',
-        mode: 'general',
-      });
-    }
-    return;
-  }
-
-  const { messages, mode } = buildPrompt(projectFiles, message, {
-    activeFile,
-    recentFiles,
-    consoleErrors,
-    buildErrors,
-    cursorPosition,
-    selectedCode,
-    chatHistory,
-  });
-
-  try {
-    await streamWithFallback(
-      messages,
-      provider,
-      preferredModel,
-      projectFiles,
-      (chunk) => {
-        if (onChunk && chunk) onChunk(chunk);
-      },
-      (result) => {
-        if (onComplete) {
-          onComplete({
-            success: true,
-            content: result?.content || '',
-            response: result?.content || '',
-            provider: result?.provider || provider,
-            model: result?.model || preferredModel,
-            mode,
-          });
-        }
-      }
-    );
-  } catch (error) {
-    console.error('[AI Controller] Stream failed:', error.message);
-    if (onComplete) {
-      onComplete({
-        success: false,
-        error: error.message,
-        content: `AI stream error: ${error.message}`,
-        response: `AI stream error: ${error.message}`,
-      });
-    }
-    throw error;
-  }
-}
-
-export async function handleAnalyze({ code, language, provider = 'openrouter' }) {
-  const message = `Analyze this ${language || 'code'} and list bugs, risks, and improvements:\n\n\`\`\`\n${code || ''}\n\`\`\``;
-  return handleChat({ message, projectFiles: {}, provider });
-}
-
-export async function handleExplain({ code, language, provider = 'openrouter' }) {
-  const message = `Explain this ${language || 'code'} clearly for a developer:\n\n\`\`\`\n${code || ''}\n\`\`\``;
-  return handleChat({ message, projectFiles: {}, provider });
+export async function handleStream(args) {
+  // Streaming path reuses the same prompt/mode detection via buildPrompt in caller
+  return handleChat(args);
 }
