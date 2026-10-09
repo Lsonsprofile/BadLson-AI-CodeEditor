@@ -1,6 +1,6 @@
 // src/lib/fileStorage.ts
 const DB_NAME = 'badlson-files';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // v2: ensure blobs store exists for video/audio/images
 const STORE_NAME = 'contents';
 const STORE_BLOBS = 'blobs';
 
@@ -66,9 +66,11 @@ export async function saveBlob(path: string, blob: Blob): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_BLOBS, 'readwrite');
     const store = tx.objectStore(STORE_BLOBS);
-    const req = store.put({ path, blob, updatedAt: Date.now() });
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    blob.arrayBuffer().then((buffer) => {
+      const req = store.put({ path, blob: buffer, mime: blob.type, updatedAt: Date.now() });
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    }).catch(reject);
   });
 }
 
@@ -80,7 +82,19 @@ export async function getBlob(path: string): Promise<Blob | null> {
     const req = store.get(path);
     req.onsuccess = () => {
       const result = req.result;
-      resolve(result ? result.blob : null);
+      if (!result) {
+        resolve(null);
+        return;
+      }
+      if (result.blob instanceof Blob) {
+        resolve(result.blob);
+      } else if (result.blob instanceof ArrayBuffer) {
+        resolve(new Blob([result.blob], { type: result.mime || 'application/octet-stream' }));
+      } else if (result.blob) {
+        resolve(new Blob([result.blob], { type: result.mime || 'application/octet-stream' }));
+      } else {
+        resolve(null);
+      }
     };
     req.onerror = () => reject(req.error);
   });
@@ -95,6 +109,11 @@ export async function deleteBlob(path: string): Promise<void> {
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
+}
+
+export async function hasBlob(path: string): Promise<boolean> {
+  const b = await getBlob(path);
+  return !!(b && b.size > 0);
 }
 
 export async function deleteFolderContents(folderPath: string): Promise<void> {
@@ -138,18 +157,18 @@ export async function clearAll(): Promise<void> {
   });
 }
 
-// Batch save for importing many files efficiently
 export async function batchSaveContents(entries: Array<{ path: string; content: string }>): Promise<void> {
   const db = await openDB();
   const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
-
   for (const entry of entries) {
     store.put({ path: entry.path, content: entry.content, updatedAt: Date.now() });
   }
-
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
 }
+
+/** Marker stored in Zustand for binary files (actual bytes live in IndexedDB blobs) */
+export const BINARY_MARKER = '__BINARY__';
