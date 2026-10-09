@@ -161,6 +161,50 @@ export async function handleChat({
 }
 
 export async function handleStream(args) {
-  // Streaming path reuses the same prompt/mode detection via buildPrompt in caller
-  return handleChat(args);
+  const { onChunk, onComplete, ...chatArgs } = args || {};
+  try {
+    const result = await handleChat(chatArgs);
+    const text = result.content || result.response || '';
+    if (typeof onChunk === 'function' && text) {
+      // Send as one chunk for compatibility with SSE route
+      onChunk(text);
+    }
+    if (typeof onComplete === 'function') {
+      onComplete(result);
+    }
+    return result;
+  } catch (error) {
+    if (typeof onComplete === 'function') {
+      onComplete({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    throw error;
+  }
+}
+
+/** Analyze project / code — wraps chat with an analysis prompt */
+export async function handleAnalyze(body = {}) {
+  const message =
+    body.message ||
+    body.prompt ||
+    'Analyze this project. Summarize structure, main files, and suggest improvements.';
+  return handleChat({
+    ...body,
+    message: `@fix ${message}`,
+  });
+}
+
+/** Explain selected code or a concept — wraps chat */
+export async function handleExplain(body = {}) {
+  const code = body.code || body.selectedCode || '';
+  const question = body.message || body.question || 'Explain this code clearly.';
+  const message = code
+    ? `Explain the following code:\n\n\`\`\`\n${code}\n\`\`\`\n\n${question}`
+    : question;
+  return handleChat({
+    ...body,
+    message,
+  });
 }
