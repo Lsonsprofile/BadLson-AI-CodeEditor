@@ -61,16 +61,25 @@ export async function deleteContent(path: string): Promise<void> {
   });
 }
 
+/**
+ * Save binary (video/audio/image). Must read the blob fully BEFORE opening
+ * the IDB transaction — otherwise the tx auto-commits and put() throws
+ * "The transaction has finished".
+ */
 export async function saveBlob(path: string, blob: Blob): Promise<void> {
+  // 1) Read bytes first (async) — outside any transaction
+  const buffer = await blob.arrayBuffer();
+  const mime = blob.type || 'application/octet-stream';
+
+  // 2) Then open a short transaction and put synchronously
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_BLOBS, 'readwrite');
     const store = tx.objectStore(STORE_BLOBS);
-    blob.arrayBuffer().then((buffer) => {
-      const req = store.put({ path, blob: buffer, mime: blob.type, updatedAt: Date.now() });
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    }).catch(reject);
+    const req = store.put({ path, blob: buffer, mime, updatedAt: Date.now() });
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -157,7 +166,9 @@ export async function clearAll(): Promise<void> {
   });
 }
 
-export async function batchSaveContents(entries: Array<{ path: string; content: string }>): Promise<void> {
+export async function batchSaveContents(
+  entries: Array<{ path: string; content: string }>
+): Promise<void> {
   const db = await openDB();
   const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
