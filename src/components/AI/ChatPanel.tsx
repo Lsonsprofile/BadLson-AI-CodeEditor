@@ -1,22 +1,14 @@
 // src/components/AI/ChatPanel.tsx
-// ─────────────────────────────────────────────────────────────────────
-// AI Chat Panel — Smart edits, wireframes, file context, copy-paste
-// ─────────────────────────────────────────────────────────────────────
-
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  Send, Bot, User, Loader2, Sparkles, X, 
-  Square, Copy, Check, Globe, Zap, Brain,
-  ChevronDown, Code, Bug, Lightbulb, Wand2,
-  CheckCircle2, XCircle, FileCode, Eye,
-  Layout, FileEdit, RefreshCw, AlertTriangle
+import {
+  Send, Bot, User, Loader2, Sparkles, Copy, Check,
+  ChevronDown, Code, Bug, Lightbulb, Wand2, Eye, Layout,
+  Circle,
 } from 'lucide-react';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 import { useApiHealth } from '@/hooks/useApiHealth';
-import { PROVIDER_CONFIG, getProviderConfig, type AiProviderKey } from '@/ai/providerConfig';
+import { PROVIDER_CONFIG, type AiProviderKey } from '@/ai/providerConfig';
 import { API_BASE_URL } from '@/services/api';
-
-// ─── TYPES ──────────────────────────────────────────────────────────
 
 interface AppliedEdit {
   filename: string;
@@ -46,395 +38,216 @@ interface ChatResponse {
   provider: string;
   model: string;
   mode: string;
-  edits: {
-    applied: AppliedEdit[];
-    failed: FailedEdit[];
-  };
+  edits: { applied: AppliedEdit[]; failed: FailedEdit[] };
   updatedFiles: Record<string, string>;
   wireframes?: WireframeData[];
   fileContext?: FileContextInfo;
   timestamp: string;
   error?: string;
+  rawContent?: string;
 }
-
-interface EditNotification {
-  id: string;
-  filename: string;
-  type: string;
-  status: 'success' | 'failed';
-  details?: string;
-}
-
-// ─── SUGGESTIONS ─────────────────────────────────────────────────────
 
 const AI_SUGGESTIONS = [
-  { icon: Wand2, text: 'Make the hero headline larger and purple', color: 'text-violet-400', mode: 'code' },
-  { icon: Code, text: 'Add an interactive FAQ list with slide details', color: 'text-blue-400', mode: 'code' },
-  { icon: Lightbulb, text: 'Add a dark/light mode toggle function', color: 'text-yellow-400', mode: 'code' },
-  { icon: Bug, text: 'Fix any responsive issues in the CSS', color: 'text-red-400', mode: 'debug' },
-  { icon: Layout, text: 'Create a wireframe for the dashboard', color: 'text-emerald-400', mode: 'wireframe' },
-  { icon: Eye, text: 'Explain how the routing works', color: 'text-cyan-400', mode: 'explain' },
+  { icon: Wand2, text: 'Improve the page design', color: 'text-violet-400' },
+  { icon: Code, text: 'Create a new HTML page', color: 'text-sky-400' },
+  { icon: Bug, text: 'Find and fix bugs', color: 'text-rose-400' },
+  { icon: Lightbulb, text: 'Add a dark mode toggle', color: 'text-amber-400' },
+  { icon: Layout, text: 'Wireframe a dashboard', color: 'text-emerald-400' },
+  { icon: Eye, text: 'Explain this project', color: 'text-cyan-400' },
 ];
-
-// ─── UTILITY: Generate unique ID ────────────────────────────────────
-
-function generateId(): string {
-  return Math.random().toString(36).substring(2, 9);
-}
-
-// ─── CODE BLOCK RENDERER ────────────────────────────────────────────
 
 function CodeBlock({ code, language }: { code: string; language?: string }) {
   const [copied, setCopied] = useState(false);
-
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(code);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Copy failed:', err);
-    }
+      setTimeout(() => setCopied(false), 1800);
+    } catch { /* ignore */ }
   };
-
   return (
-    <div className="relative group my-2 rounded-lg overflow-hidden border border-[#1e293b] bg-[#0d1117]">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[#161b22] border-b border-[#1e293b]">
-        <span className="text-[10px] text-slate-500 font-mono">{language || 'code'}</span>
+    <div className="my-2 rounded-xl overflow-hidden border border-white/10 bg-[#0c0f14]">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-white/5 border-b border-white/5">
+        <span className="text-[10px] font-medium text-slate-400 tracking-wide uppercase">
+          {language || 'code'}
+        </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300 transition"
+          className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-white transition"
         >
           {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-          {copied ? 'Copied!' : 'Copy'}
+          {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <pre className="p-3 overflow-x-auto text-[11px] font-mono text-slate-300 leading-relaxed">
+      <pre className="p-3 overflow-x-auto text-[11px] font-mono text-slate-300 leading-relaxed max-h-80">
         <code>{code}</code>
       </pre>
     </div>
   );
 }
 
-// ─── WIREFRAME RENDERER ─────────────────────────────────────────────
-
-function WireframeBlock({ title, content }: WireframeData) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Copy failed:', err);
-    }
-  };
-
-  return (
-    <div className="my-3 rounded-lg overflow-hidden border border-emerald-500/30 bg-[#0d1117]">
-      <div className="flex items-center justify-between px-3 py-2 bg-emerald-500/10 border-b border-emerald-500/20">
-        <div className="flex items-center gap-2">
-          <Layout className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="text-[11px] font-medium text-emerald-300">Wireframe: {title}</span>
-        </div>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1 text-[10px] text-emerald-400/70 hover:text-emerald-300 transition"
-        >
-          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copied ? 'Copied!' : 'Copy'}
-        </button>
-      </div>
-      <pre className="p-3 overflow-x-auto text-[10px] font-mono text-emerald-200/80 leading-tight whitespace-pre">
-        {content}
-      </pre>
-    </div>
-  );
-}
-
-// ─── MESSAGE CONTENT RENDERER ───────────────────────────────────────
-
-function MessageContent({ content, wireframes }: { content: string; wireframes?: WireframeData[] }) {
+function MessageContent({ content }: { content: string }) {
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-
-  // Match code blocks
-  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+  const codeBlockRegex = /```([^\n`]*)\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
 
   while ((match = codeBlockRegex.exec(content)) !== null) {
     if (match.index > lastIndex) {
-      const textBefore = content.substring(lastIndex, match.index);
-      parts.push(<MarkdownText key={`text-${lastIndex}`} text={textBefore} />);
+      const text = content.slice(lastIndex, match.index);
+      parts.push(
+        <div
+          key={`t-${lastIndex}`}
+          className="text-[13px] leading-relaxed text-slate-200 whitespace-pre-wrap"
+        >
+          {text}
+        </div>
+      );
     }
-
-    const language = match[1];
+    const tag = (match[1] || '').trim();
     const code = match[2].trim();
-
-    if (!language?.startsWith('edit:') && !language?.startsWith('patch:') && !language?.startsWith('wireframe:')) {
-      parts.push(<CodeBlock key={`code-${match.index}`} code={code} language={language} />);
+    if (!tag.startsWith('wireframe:')) {
+      const label = tag.startsWith('edit:') || tag.startsWith('patch:')
+        ? tag.replace(/^(edit|patch):/, '')
+        : tag || 'code';
+      parts.push(<CodeBlock key={`c-${match.index}`} code={code} language={label} />);
     }
-
     lastIndex = match.index + match[0].length;
   }
 
   if (lastIndex < content.length) {
-    parts.push(<MarkdownText key={`text-${lastIndex}`} text={content.substring(lastIndex)} />);
+    parts.push(
+      <div
+        key={`t-${lastIndex}`}
+        className="text-[13px] leading-relaxed text-slate-200 whitespace-pre-wrap"
+      >
+        {content.slice(lastIndex)}
+      </div>
+    );
   }
 
-  return (
-    <div className="space-y-1">
-      {parts}
-      {wireframes && wireframes.map((wf, idx) => (
-        <WireframeBlock key={idx} title={wf.title} content={wf.content} />
-      ))}
-    </div>
-  );
+  return <div className="space-y-1">{parts}</div>;
 }
-
-// ─── SIMPLE MARKDOWN TEXT RENDERER ──────────────────────────────────
-
-function MarkdownText({ text }: { text: string }) {
-  let rendered = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-  rendered = rendered.replace(/\*(.*?)\*/g, '<em>$1</em>');
-  rendered = rendered.replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 bg-[#1a2035] rounded text-[11px] font-mono text-violet-300">$1</code>');
-  rendered = rendered.replace(/\n/g, '<br/>');
-
-  return <div className="text-sm text-slate-200 leading-relaxed" dangerouslySetInnerHTML={{ __html: rendered }} />;
-}
-
-// ─── MESSAGE METADATA STORE ────────────────────────────────────────
-
-const messageMetadataStore = new Map<number, {
-  provider?: string;
-  model?: string;
-  mode?: string;
-  edits?: AppliedEdit[];
-  failedEdits?: FailedEdit[];
-  wireframes?: WireframeData[];
-  fileContext?: FileContextInfo;
-}>();
-
-// ─── MAIN COMPONENT ─────────────────────────────────────────────────
 
 export default function ChatPanel() {
-  // ─── STORE ──────────────────────────────────────────────────────────
-
-  const { 
-    chatHistory, 
-    isAiTyping, 
-    addChatMessage, 
-    setIsAiTyping, 
-    authUser,
+  const {
+    chatHistory,
+    isAiTyping,
+    addChatMessage,
+    setIsAiTyping,
     aiProvider,
     setAiProvider,
     files,
     activeFile,
     openFiles,
     updateFile,
-    openFile
+    openFile,
   } = useWorkspaceStore();
-
-  // ─── LOCAL STATE ──────────────────────────────────────────────────
 
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [editNotifications, setEditNotifications] = useState<EditNotification[]>([]);
-  const [showFileContext, setShowFileContext] = useState(false);
-  const [lastContext, setLastContext] = useState<FileContextInfo | null>(null);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // ─── API HEALTH ──────────────────────────────────────────────────
-
-  const { status: apiStatus } = useApiHealth({
-    pollingInterval: 30000,
-    onStatusChange: (status: string) => {
-      console.log(`[ChatPanel] API status: ${status}`);
-    },
-  });
-
-  // ─── AUTO-SCROLL ──────────────────────────────────────────────────
+  const { status: apiStatus } = useApiHealth({ pollingInterval: 30000 });
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isAiTyping]);
 
-  // ─── FOCUS INPUT ──────────────────────────────────────────────────
-
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // ─── CLICK OUTSIDE DROPDOWN ──────────────────────────────────────
-
   useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
+    function onClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setIsDropdownOpen(false);
       }
     }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
-
-  // ─── CLEAR NOTIFICATIONS ─────────────────────────────────────────
-
-  useEffect(() => {
-    if (editNotifications.length > 0) {
-      const timer = setTimeout(() => {
-        setEditNotifications([]);
-      }, 10000);
-      return () => clearTimeout(timer);
-    }
-  }, [editNotifications]);
-
-  // ─── BUILD PROJECT FILES ─────────────────────────────────────────
 
   const buildProjectFiles = useCallback((): Record<string, string> => {
-    const projectFiles: Record<string, string> = {};
+    const out: Record<string, string> = {};
     for (const [path, content] of Object.entries(files)) {
-      if (content && typeof content === 'string' && content.trim()) {
-        projectFiles[path] = content;
+      if (content && typeof content === 'string' && content.trim() && content !== '__BINARY__') {
+        out[path] = content;
       }
     }
-    return projectFiles;
+    return out;
   }, [files]);
 
-  // ─── APPLY FILE UPDATES ──────────────────────────────────────────
-
-  const applyFileUpdates = useCallback((updatedFiles: Record<string, string>) => {
-    const notifications: EditNotification[] = [];
-    
-    for (const [path, content] of Object.entries(updatedFiles)) {
-      if (typeof content !== 'string') continue;
-
-      updateFile(path, content);
-      
-      if (!openFiles.includes(path)) {
+  const applyFileUpdates = useCallback(
+    (updatedFiles: Record<string, string>) => {
+      for (const [path, content] of Object.entries(updatedFiles)) {
+        if (typeof content !== 'string' || !path) continue;
+        updateFile(path, content);
         openFile(path);
       }
+    },
+    [updateFile, openFile]
+  );
 
-      notifications.push({
-        id: generateId(),
-        filename: path,
-        type: 'updated',
-        status: 'success',
-        details: `${content.split('\n').length} lines`,
-      });
-
-      console.log(`✅ Applied update to: ${path}`);
-    }
-
-    if (notifications.length > 0) {
-      setEditNotifications(prev => [...notifications, ...prev].slice(0, 10));
-    }
-
-    return notifications;
-  }, [updateFile, openFile, openFiles]);
-
-  // ─── PROCESS EDIT RESULTS ────────────────────────────────────────
-
-  const processEditResults = useCallback((data: ChatResponse): string => {
-    let responseMessage = data.response || '';
-    const notifications: EditNotification[] = [];
-
-    if (data.edits?.applied && data.edits.applied.length > 0) {
-      const editDetails = data.edits.applied.map((e: AppliedEdit) => {
-        let details = '';
-        
-        switch (e.type) {
-          case 'created':
-            details = 'New file created';
-            break;
-          case 'replaced':
-            details = 'Full file replaced';
-            break;
-          case 'patched':
-            details = 'Smart patch applied';
-            break;
-          case 'smart-merge':
-            details = 'Changes merged';
-            break;
-          default:
-            details = e.type || 'Updated';
+  const extractFilesFromAiText = useCallback(
+    (text: string): Record<string, string> => {
+      const out: Record<string, string> = {};
+      if (!text) return out;
+      const editRe = /```edit:([^\n]+)\n([\s\S]*?)```/g;
+      let m: RegExpExecArray | null;
+      while ((m = editRe.exec(text)) !== null) {
+        const name = m[1].trim();
+        const code = m[2].trim();
+        if (name && code) out[name] = code;
+      }
+      if (Object.keys(out).length === 0) {
+        const fenceRe = /```(html|css|js|javascript|ts|tsx|jsx)?\n([\s\S]*?)```/gi;
+        while ((m = fenceRe.exec(text)) !== null) {
+          const lang = (m[1] || '').toLowerCase();
+          const code = m[2].trim();
+          if (!code || code.length < 8) continue;
+          let filename: string | null = null;
+          if (lang === 'html' || code.includes('<!DOCTYPE') || code.includes('<html')) {
+            filename = activeFile?.endsWith('.html') ? activeFile : 'index.html';
+          } else if (lang === 'css') {
+            filename = activeFile?.endsWith('.css') ? activeFile : 'style.css';
+          } else if (lang === 'js' || lang === 'javascript') {
+            filename = activeFile?.endsWith('.js') ? activeFile : 'script.js';
+          } else if (activeFile) {
+            filename = activeFile;
+          }
+          if (filename && !out[filename]) out[filename] = code;
         }
-        
-        notifications.push({
-          id: generateId(),
-          filename: e.filename,
-          type: e.type,
-          status: 'success',
-          details,
-        });
-        
-        return `✅ ${e.filename} — ${details}`;
-      }).join('\n');
-      
-      if (editDetails) {
-        responseMessage += `\n\n**✅ Applied Changes:**\n${editDetails}`;
       }
-    }
+      return out;
+    },
+    [activeFile]
+  );
 
-    if (data.edits?.failed && data.edits.failed.length > 0) {
-      const failedDetails = data.edits.failed.map((e: FailedEdit) => {
-        notifications.push({
-          id: generateId(),
-          filename: e.filename,
-          type: 'failed',
-          status: 'failed',
-          details: e.reason || 'Unknown error',
-        });
-        return `❌ ${e.filename}: ${e.reason || 'Unknown error'}`;
-      }).join('\n');
-      
-      if (failedDetails) {
-        responseMessage += `\n\n**⚠️ Failed to Apply:**\n${failedDetails}`;
-      }
-    }
+  const handleSend = async (overrideText?: string) => {
+    const userMessage = (overrideText ?? input).trim();
+    if (!userMessage || isLoading || isAiTyping) return;
 
-    if (notifications.length > 0) {
-      setEditNotifications(prev => [...notifications, ...prev].slice(0, 10));
-    }
-
-    return responseMessage;
-  }, []);
-
-  // ─── HANDLE SEND ──────────────────────────────────────────────────
-
-  const handleSend = async () => {
-    if (!input.trim() || isLoading || isAiTyping) return;
-
-    const userMessage = input.trim();
     setInput('');
     setIsLoading(true);
-    setErrorMessage(null);
-    setEditNotifications([]);
-
     addChatMessage('user', userMessage);
-    console.log('📤 Sending:', userMessage);
 
     try {
       setIsAiTyping(true);
-
       const projectFiles = buildProjectFiles();
-      console.log(`📁 Sending ${Object.keys(projectFiles).length} files`);
 
-      const API_URL = API_BASE_URL;
-      console.log('🌐 Using API URL:', API_URL);
-
-      const response = await fetch(`${API_URL}/ai/chat`, {
+      const response = await fetch(`${API_BASE_URL}/ai/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: userMessage,
           projectFiles,
-          chatHistory: chatHistory.slice(-10).map(msg => ({
+          chatHistory: chatHistory.slice(-10).map((msg) => ({
             role: msg.role,
             content: msg.content,
           })),
@@ -453,93 +266,31 @@ export default function ChatPanel() {
         throw new Error(errorText || `HTTP ${response.status}`);
       }
 
-      const backendResponse = await response.json() as ChatResponse | { success: boolean; data: ChatResponse };
-      const data = (backendResponse as any).data ?? backendResponse;
-      console.log('📥 Response:', data);
+      const backendResponse = (await response.json()) as ChatResponse | { success: boolean; data: ChatResponse };
+      const data = ((backendResponse as any).data ?? backendResponse) as ChatResponse;
 
-      if (!data.success) {
-        throw new Error(data.error || 'AI request failed');
-      }
+      if (!data.success) throw new Error(data.error || 'AI request failed');
 
-      // Apply file updates
       if (data.updatedFiles && Object.keys(data.updatedFiles).length > 0) {
         applyFileUpdates(data.updatedFiles);
-      }
-
-      // Process edit results and build response message
-      const responseMessage = processEditResults(data);
-
-      // Store file context info
-      if (data.fileContext) {
-        setLastContext(data.fileContext);
-      }
-
-      // Add AI response
-      if (responseMessage) {
-        addChatMessage('ai', responseMessage);
-        
-        // Store metadata
-        const messageIndex = chatHistory.length;
-        messageMetadataStore.set(messageIndex, {
-          provider: data.provider,
-          model: data.model,
-          mode: data.mode,
-          edits: data.edits?.applied,
-          failedEdits: data.edits?.failed,
-          wireframes: data.wireframes,
-          fileContext: data.fileContext,
-        });
-        
-        console.log('✅ AI response added');
       } else {
-        throw new Error('No response from AI');
+        const aiText = data.rawContent || data.response || '';
+        const extracted = extractFilesFromAiText(aiText);
+        if (Object.keys(extracted).length > 0) applyFileUpdates(extracted);
       }
 
+      const message = data.rawContent || data.response || '';
+      if (!message) throw new Error('No response from AI');
+
+      addChatMessage('assistant', message);
     } catch (error) {
-      console.error('❌ Error:', error);
       const msg = error instanceof Error ? error.message : 'Unknown error';
-      setErrorMessage(msg);
-      
-      let errorResponse = `⚠️ **Error:** ${msg}`;
-      if (msg.includes('timeout') || msg.includes('ECONNREFUSED')) {
-        errorResponse += '\n\n💡 **Try:** Check if the backend server is running, or switch AI providers.';
-      } else if (msg.includes('API key') || msg.includes('not_configured')) {
-        errorResponse += '\n\n💡 **Try:** Add your API key or enable `MOCK_AI=true`.';
-      } else if (msg.includes('too large') || msg.includes('MAX_TOTAL_CHARS')) {
-        errorResponse += '\n\n💡 **Try:** Close some files or ask about a specific file.';
-      }
-      
-      addChatMessage('ai', errorResponse);
+      addChatMessage('assistant', `Something went wrong: ${msg}`);
     } finally {
       setIsAiTyping(false);
       setIsLoading(false);
     }
   };
-
-  // ─── HANDLE STOP ──────────────────────────────────────────────────
-
-  const handleStop = () => {
-    setIsAiTyping(false);
-    setIsLoading(false);
-    console.log('⏹️ Generation stopped by user');
-  };
-
-  // ─── HANDLE SUGGESTION CLICK ──────────────────────────────────────
-
-  const handleSuggestionClick = (text: string) => {
-    setInput(text);
-    inputRef.current?.focus();
-  };
-
-  // ─── HANDLE PROVIDER SWITCH ──────────────────────────────────────
-
-  const handleProviderSwitch = (provider: AiProviderKey) => {
-    setAiProvider({ provider });
-    setIsDropdownOpen(false);
-    console.log('🔄 Switched to provider:', provider);
-  };
-
-  // ─── HANDLE KEY DOWN ─────────────────────────────────────────────
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -548,367 +299,212 @@ export default function ChatPanel() {
     }
   };
 
-  // ─── HANDLE CLEAR ─────────────────────────────────────────────────
-
-  const handleClear = () => {
-    if (chatHistory.length === 0) return;
-    if (chatHistory.length > 5 && !window.confirm(`Clear all ${chatHistory.length} messages?`)) return;
-    useWorkspaceStore.setState({ chatHistory: [] });
-    setErrorMessage(null);
-    setEditNotifications([]);
-    setLastContext(null);
-    messageMetadataStore.clear();
+  const handleCopy = async (text: string, idx: number) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx(null), 1500);
+    } catch { /* ignore */ }
   };
 
-  // ─── HANDLE RETRY ─────────────────────────────────────────────────
+  const online =
+    apiStatus === 'online' ||
+    apiStatus === 'ok' ||
+    apiStatus === true ||
+    String(apiStatus) === 'online';
 
-  const handleRetry = () => {
-    if (errorMessage) {
-      setErrorMessage(null);
-      const lastUserMsg = [...chatHistory].reverse().find(m => m.role === 'user');
-      if (lastUserMsg) {
-        setInput(lastUserMsg.content);
-      }
-    }
-  };
-
-  // ─── COPY MESSAGE CONTENT ────────────────────────────────────────
-
-  const handleCopyMessage = useCallback((text: string) => {
-    navigator.clipboard.writeText(text).catch(err => console.error('Copy failed:', err));
-  }, []);
-
-  const isBusy = isLoading || isAiTyping;
-
-  // ─── RENDER ──────────────────────────────────────────────────────
-
-  const providerConfig = getProviderConfig(aiProvider.provider);
-  const providerLabel = providerConfig.label;
+  const providers = Object.entries(PROVIDER_CONFIG || {}) as [
+    AiProviderKey,
+    { label?: string; name?: string }
+  ][];
 
   return (
-    <div className="w-full h-full bg-[#0b0f19] flex flex-col border-l border-[#1e293b]">
-      {/* ─── HEADER ────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e293b] shrink-0 bg-[#0d1117]">
-        <div className="flex items-center gap-3">
-          <Sparkles className="w-4 h-4 text-violet-400" />
-          <span className="text-sm font-medium text-white">AI Assistant</span>
-          <span className={`text-[9px] px-2 py-0.5 rounded-full ${
-            apiStatus === 'online' 
-              ? 'bg-emerald-500/20 text-emerald-400' 
-              : 'bg-red-500/20 text-red-400'
-          }`}>
-            {apiStatus === 'online' ? '● Online' : '● Offline'}
-          </span>
+    <div className="h-full w-full flex flex-col bg-[#0a0c10] text-slate-100">
+      {/* Header */}
+      <div className="shrink-0 px-4 py-3 border-b border-white/5 flex items-center justify-between bg-[#0d1017]">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+            <Sparkles className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <div className="text-sm font-semibold tracking-tight">AI Assistant</div>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <Circle
+                className={`w-2 h-2 fill-current ${online ? 'text-emerald-400' : 'text-rose-400'}`}
+              />
+              <span className="text-[10px] text-slate-500">
+                {online ? 'Connected' : 'Offline'}
+              </span>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {/* File Context Toggle */}
-          {lastContext && (
-            <button
-              onClick={() => setShowFileContext(!showFileContext)}
-              className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] transition ${
-                showFileContext 
-                  ? 'bg-indigo-500/20 text-indigo-400' 
-                  : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              <FileCode className="w-3 h-3" />
-              {lastContext.fileCount} files
-            </button>
-          )}
 
-          {/* Provider Dropdown */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1a2035] border border-[#1e293b] hover:border-indigo-500/50 transition text-[10px] text-slate-300"
-            >
-              {aiProvider.provider === 'openrouter' && <Globe className="w-3 h-3 text-emerald-400" />}
-              {aiProvider.provider === 'groq' && <Zap className="w-3 h-3 text-amber-400" />}
-              {aiProvider.provider === 'gemini' && <Brain className="w-3 h-3 text-blue-400" />}
-              <span>{providerLabel}</span>
-              <ChevronDown className="w-3 h-3 text-slate-500" />
-            </button>
-            
-            {isDropdownOpen && (
-              <div className="absolute right-0 mt-1 w-48 rounded-lg border border-[#1e293b] bg-[#0d1117] shadow-2xl z-50 overflow-hidden">
-                {(Object.keys(PROVIDER_CONFIG) as AiProviderKey[]).map((key) => {
-                  const cfg = getProviderConfig(key);
-                  return (
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={() => setIsDropdownOpen((v) => !v)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-slate-300 transition"
+          >
+            <span className="capitalize">{aiProvider?.provider || 'openrouter'}</span>
+            <ChevronDown className="w-3 h-3 opacity-60" />
+          </button>
+          {isDropdownOpen && (
+            <div className="absolute right-0 mt-1 w-40 rounded-xl border border-white/10 bg-[#12151c] shadow-xl z-20 overflow-hidden">
+              {providers.length > 0
+                ? providers.map(([key, cfg]) => (
                     <button
                       key={key}
-                      onClick={() => handleProviderSwitch(key)}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[#1a2035] transition ${
-                        aiProvider.provider === key ? 'bg-indigo-500/10 text-indigo-400' : 'text-slate-300'
+                      onClick={() => {
+                        setAiProvider({ ...aiProvider, provider: key });
+                        setIsDropdownOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 transition ${
+                        aiProvider?.provider === key ? 'text-indigo-300' : 'text-slate-300'
                       }`}
                     >
-                      {key === 'openrouter' && <Globe className="w-3.5 h-3.5 text-emerald-400" />}
-                      {key === 'groq' && <Zap className="w-3.5 h-3.5 text-amber-400" />}
-                      {key === 'gemini' && <Brain className="w-3.5 h-3.5 text-blue-400" />}
-                      {cfg.label}
-                      <span className="text-[9px] text-slate-500 ml-auto">{cfg.desc}</span>
+                      {cfg.label || cfg.name || key}
                     </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <span className="text-[10px] text-slate-500">{chatHistory.length} msgs</span>
-          <button
-            onClick={handleClear}
-            disabled={chatHistory.length === 0}
-            className="p-1.5 rounded hover:bg-[#1a2035] transition disabled:opacity-30"
-            title="Clear chat"
-          >
-            <X className="w-3.5 h-3.5 text-slate-400" />
-          </button>
+                  ))
+                : ['openrouter', 'groq', 'gemini'].map((key) => (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        setAiProvider({ ...aiProvider, provider: key as AiProviderKey });
+                        setIsDropdownOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-[11px] text-slate-300 hover:bg-white/5 capitalize"
+                    >
+                      {key}
+                    </button>
+                  ))}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* ─── FILE CONTEXT PANEL ───────────────────────────────────── */}
-      {showFileContext && lastContext && (
-        <div className="px-4 py-2 border-b border-[#1e293b] bg-[#0d1117] shrink-0">
-          <div className="text-[10px] text-slate-400 space-y-1">
-            <div className="flex items-center gap-2">
-              <Eye className="w-3 h-3 text-indigo-400" />
-              <span>AI analyzed <strong className="text-indigo-300">{lastContext.fileCount}</strong> files</span>
-            </div>
-            {lastContext.htmlAnalyzed && (
-              <div className="flex items-center gap-2 text-emerald-400/70">
-                <Layout className="w-3 h-3" />
-                <span>HTML structure parsed (DOM, meta tags, sections)</span>
-              </div>
-            )}
-            <div className="text-[9px] text-slate-500">
-              The AI can read your file contents, understand imports, and suggest precise edits.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ─── EDIT NOTIFICATIONS ───────────────────────────────────── */}
-      {editNotifications.length > 0 && (
-        <div className="px-4 py-2 border-b border-[#1e293b] bg-[#0d1117] shrink-0 space-y-1">
-          <div className="text-[10px] font-medium text-slate-400 mb-1 flex items-center gap-1">
-            <FileEdit className="w-3 h-3" />
-            Applied Changes
-          </div>
-          {editNotifications.map((notif) => (
-            <div key={notif.id} className="flex items-center gap-2 text-[10px] animate-in fade-in slide-in-from-top-1">
-              {notif.status === 'success' ? (
-                <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-              ) : (
-                <XCircle className="w-3 h-3 text-red-400 shrink-0" />
-              )}
-              <span className={notif.status === 'success' ? 'text-emerald-300' : 'text-red-300'}>
-                {notif.filename}
-              </span>
-              <span className="text-slate-500 text-[9px]">{notif.details}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ─── MESSAGES ────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
         {chatHistory.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <Bot className="w-12 h-12 text-slate-600 mb-3" />
-            <p className="text-sm text-slate-400">Start a conversation with the AI</p>
-            <p className="text-[11px] text-slate-500 mt-1 max-w-[240px]">
-              I can read your files, generate code, create wireframes, fix bugs, and edit specific lines
+          <div className="h-full flex flex-col items-center justify-center px-4 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-600/20 border border-white/10 flex items-center justify-center mb-4">
+              <Bot className="w-7 h-7 text-indigo-300" />
+            </div>
+            <h3 className="text-base font-semibold text-white mb-1">How can I help?</h3>
+            <p className="text-[12px] text-slate-500 mb-6 max-w-[240px]">
+              Ask me to write code, fix bugs, or create pages for your project.
             </p>
-            
-            {/* Suggestions */}
-            <div className="flex flex-wrap justify-center gap-2 mt-4 max-w-md">
-              {AI_SUGGESTIONS.map((suggestion, idx) => (
+            <div className="flex flex-wrap gap-2 justify-center max-w-[300px]">
+              {AI_SUGGESTIONS.map((s) => (
                 <button
-                  key={idx}
-                  onClick={() => handleSuggestionClick(suggestion.text)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1a2035] border border-[#1e293b] hover:border-indigo-500/50 transition text-[10px] text-slate-400 hover:text-slate-200"
+                  key={s.text}
+                  onClick={() => handleSend(s.text)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 hover:border-indigo-400/40 hover:bg-indigo-500/10 transition text-[11px] text-slate-300"
                 >
-                  <suggestion.icon className={`w-3 h-3 ${suggestion.color}`} />
-                  <span className="max-w-[140px] truncate">{suggestion.text}</span>
+                  <s.icon className={`w-3 h-3 ${s.color}`} />
+                  {s.text}
                 </button>
               ))}
             </div>
           </div>
         ) : (
-          <>
-            {chatHistory.map((msg, index) => {
-              const metadata = messageMetadataStore.get(index);
-              
-              return (
-                <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[90%] rounded-lg px-4 py-3 ${
-                    msg.role === 'user'
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-[#1a2035] text-slate-200 border border-[#1e293b]'
-                  }`}>
-                    {/* Message header */}
-                    <div className="flex items-center gap-2 mb-2">
-                      {msg.role === 'user' ? (
-                        <User className="w-3.5 h-3.5 opacity-70" />
+          chatHistory.map((msg, index) => {
+            const isUser = msg.role === 'user';
+            return (
+              <div
+                key={index}
+                className={`flex gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
+              >
+                <div
+                  className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center ${
+                    isUser
+                      ? 'bg-indigo-600'
+                      : 'bg-gradient-to-br from-violet-600 to-indigo-600'
+                  }`}
+                >
+                  {isUser ? (
+                    <User className="w-3.5 h-3.5 text-white" />
+                  ) : (
+                    <Bot className="w-3.5 h-3.5 text-white" />
+                  )}
+                </div>
+                <div
+                  className={`group relative max-w-[85%] rounded-2xl px-3.5 py-2.5 ${
+                    isUser
+                      ? 'bg-indigo-600 text-white rounded-tr-sm'
+                      : 'bg-[#141820] border border-white/5 text-slate-200 rounded-tl-sm'
+                  }`}
+                >
+                  {!isUser && (
+                    <button
+                      onClick={() => handleCopy(msg.content, index)}
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition p-1 rounded bg-black/30 hover:bg-black/50"
+                      title="Copy"
+                    >
+                      {copiedIdx === index ? (
+                        <Check className="w-3 h-3 text-emerald-400" />
                       ) : (
-                        <Bot className="w-3.5 h-3.5 opacity-70" />
+                        <Copy className="w-3 h-3 text-slate-400" />
                       )}
-                      <span className="text-[10px] opacity-70">
-                        {msg.role === 'user' ? 'You' : 'AI Assistant'}
-                      </span>
-                      {metadata?.mode && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#0d1117] text-slate-500">
-                          {metadata.mode}
-                        </span>
-                      )}
-                      {msg.role === 'assistant' && (
-                        <button
-                          onClick={() => handleCopyMessage(msg.content)}
-                          className="ml-auto opacity-40 hover:opacity-100 transition"
-                          title="Copy message"
-                        >
-                          <Copy className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Message content */}
-                    <MessageContent 
-                      content={msg.content} 
-                      wireframes={metadata?.wireframes} 
-                    />
-
-                    {/* Metadata footer */}
-                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-[#1e293b]/50">
-                      <span className="text-[9px] opacity-40">
-                        {new Date(msg.timestamp).toLocaleTimeString()}
-                      </span>
-                      {metadata?.provider && (
-                        <span className="text-[9px] opacity-30">
-                          via {metadata.provider}
-                        </span>
-                      )}
-                      {metadata?.model && (
-                        <span className="text-[9px] opacity-30">
-                          {metadata.model}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Edit summary */}
-                    {metadata?.edits && metadata.edits.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-[#1e293b]/50">
-                        <div className="text-[9px] text-emerald-400/70 flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" />
-                          Modified: {metadata.edits.map(e => e.filename).join(', ')}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            
-            {/* Typing indicator */}
-            {isAiTyping && (
-              <div className="flex justify-start">
-                <div className="bg-[#1a2035] text-slate-400 rounded-lg px-4 py-3 border border-[#1e293b]">
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
-                    <span className="text-sm">AI is analyzing your project...</span>
-                  </div>
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    Reading file structure, imports, and dependencies
-                  </p>
+                    </button>
+                  )}
+                  {isUser ? (
+                    <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                  ) : (
+                    <MessageContent content={msg.content} />
+                  )}
                 </div>
               </div>
-            )}
+            );
+          })
+        )}
 
-            {/* Error with retry */}
-            {errorMessage && (
-              <div className="flex justify-center">
-                <div className="bg-red-500/10 text-red-400 rounded-lg px-4 py-3 border border-red-500/20 text-sm max-w-[90%]">
-                  <div className="flex items-center gap-2 mb-2">
-                    <AlertTriangle className="w-4 h-4" />
-                    <span className="font-medium">Error</span>
-                  </div>
-                  <p className="text-xs leading-relaxed">{errorMessage}</p>
-                  <button
-                    onClick={handleRetry}
-                    className="mt-2 flex items-center gap-1 text-[11px] text-red-300 hover:text-red-200 transition"
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    Retry
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
+        {isAiTyping && (
+          <div className="flex gap-2.5">
+            <div className="shrink-0 w-7 h-7 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center">
+              <Bot className="w-3.5 h-3.5 text-white" />
+            </div>
+            <div className="bg-[#141820] border border-white/5 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
+              <span className="text-[12px] text-slate-400">Thinking…</span>
+            </div>
+          </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ─── STATUS BAR ───────────────────────────────────────────── */}
-      <div className="px-3 py-1.5 bg-[#0d1117] border-t border-[#1e293b] shrink-0 flex flex-wrap items-center gap-2 text-[9px] text-slate-500">
-        {isBusy && (
-          <span className="text-violet-400 flex items-center gap-1">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            {isAiTyping ? 'AI is generating...' : 'Sending...'}
-          </span>
-        )}
-        {lastContext && !isBusy && (
-          <span className="text-slate-500 flex items-center gap-1">
-            <Eye className="w-3 h-3" />
-            Analyzed {lastContext.fileCount} files
-          </span>
-        )}
-        {authUser ? (
-          <span className="text-emerald-400/60 ml-auto">✓ Saved workspace</span>
-        ) : (
-          <span className="text-slate-500 ml-auto">💡 Login to save workspace</span>
-        )}
-        <span className="text-slate-600">
-          {chatHistory.length} messages • {Object.keys(files).length} files
-        </span>
-      </div>
-
-      {/* ─── INPUT AREA ───────────────────────────────────────────── */}
-      <div className="p-3 bg-[#0d1117] border-t border-[#1e293b] shrink-0">
-        <div className="flex gap-2">
-          <input
+      {/* Input */}
+      <div className="shrink-0 p-3 border-t border-white/5 bg-[#0d1017]">
+        <div className="flex items-end gap-2 rounded-2xl bg-[#141820] border border-white/10 focus-within:border-indigo-500/40 transition px-3 py-2">
+          <textarea
             ref={inputRef}
-            type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask me to code, fix, explain, or design..."
-            disabled={isBusy}
-            className="flex-1 rounded-md border border-[#1e293b] bg-[#111625] px-3 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500 disabled:opacity-50 transition"
+            placeholder="Ask AI to write or fix code…"
+            rows={1}
+            disabled={isLoading || isAiTyping}
+            className="flex-1 bg-transparent text-[13px] text-slate-100 placeholder:text-slate-500 resize-none outline-none max-h-28 min-h-[24px] py-1"
+            style={{ height: 'auto' }}
+            onInput={(e) => {
+              const t = e.currentTarget;
+              t.style.height = 'auto';
+              t.style.height = Math.min(t.scrollHeight, 112) + 'px';
+            }}
           />
-          {isBusy ? (
-            <button
-              onClick={handleStop}
-              className="rounded-md bg-red-600 px-3 py-2 text-white hover:bg-red-500 transition shrink-0"
-              title="Stop generation"
-            >
-              <Square className="w-5 h-5" />
-            </button>
-          ) : (
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || isBusy}
-              className="rounded-md bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-500 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-              title="Send message"
-            >
-              <Send className="w-5 h-5" />
-            </button>
-          )}
+          <button
+            onClick={() => handleSend()}
+            disabled={!input.trim() || isLoading || isAiTyping}
+            className="shrink-0 w-8 h-8 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 flex items-center justify-center transition shadow-lg shadow-indigo-600/20"
+          >
+            {isLoading || isAiTyping ? (
+              <Loader2 className="w-4 h-4 text-white animate-spin" />
+            ) : (
+              <Send className="w-3.5 h-3.5 text-white" />
+            )}
+          </button>
         </div>
-        <div className="flex justify-between mt-1.5 px-1">
-          <p className="text-[9px] text-slate-500">Shift + Enter for new line • AI reads your files automatically</p>
-          <p className="text-[9px] text-slate-500">
-            {isBusy ? '⏹️ Click stop to cancel' : `Using ${providerLabel}`}
-          </p>
-        </div>
+        <p className="text-[10px] text-slate-600 text-center mt-1.5">
+          Enter to send · Shift+Enter for new line
+        </p>
       </div>
     </div>
   );
