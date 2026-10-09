@@ -21,6 +21,7 @@ function runIfExists(script) {
 console.log('BadLson setup — applying local patches...');
 runIfExists('wire-ai-prompts.mjs');
 runIfExists('wire-ai-commands.mjs');
+runIfExists('wire-file-context.mjs');
 runIfExists('fix-chat-show-code.mjs');
 runIfExists('fix-video-playback.mjs');
 runIfExists('fix-import.mjs');
