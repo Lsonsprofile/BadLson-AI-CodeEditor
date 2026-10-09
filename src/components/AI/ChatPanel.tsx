@@ -47,6 +47,23 @@ interface ChatResponse {
   rawContent?: string;
 }
 
+export type AiCommand = 'fix' | 'create' | 'bug' | null;
+
+function parseAiCommand(raw: string): { command: AiCommand; text: string } {
+  const trimmed = raw.trim();
+  const m = trimmed.match(/^@(fix|create|bug)\b[\s,:]*/i);
+  if (!m) return { command: null, text: trimmed };
+  const command = m[1].toLowerCase() as AiCommand;
+  const text = trimmed.slice(m[0].length).trim() || trimmed;
+  return { command, text };
+}
+
+const COMMAND_HINTS = [
+  { cmd: '@fix', desc: 'Show code only — do not apply' },
+  { cmd: '@create', desc: 'Create/write files into the project' },
+  { cmd: '@bug', desc: 'Surgical bug fix only' },
+];
+
 const AI_SUGGESTIONS = [
   { icon: Wand2, text: 'Improve the page design', color: 'text-violet-400' },
   { icon: Code, text: 'Create a new HTML page', color: 'text-sky-400' },
@@ -277,16 +294,27 @@ export default function ChatPanel() {
 
       if (!data.success) throw new Error(data.error || 'AI request failed');
 
-      if (data.updatedFiles && Object.keys(data.updatedFiles).length > 0) {
-        applyFileUpdates(data.updatedFiles);
-      } else {
-        const aiText = data.rawContent || data.response || '';
-        const extracted = extractFilesFromAiText(aiText);
-        if (Object.keys(extracted).length > 0) applyFileUpdates(extracted);
+      const { command } = parseAiCommand(userMessage);
+      // @fix = never apply. @create/@bug = apply. no command = apply (default)
+      const shouldApply = command !== 'fix';
+
+      const aiText = data.rawContent || data.response || '';
+      if (shouldApply) {
+        if (data.updatedFiles && Object.keys(data.updatedFiles).length > 0) {
+          applyFileUpdates(data.updatedFiles);
+        } else {
+          const extracted = extractFilesFromAiText(aiText);
+          if (Object.keys(extracted).length > 0) applyFileUpdates(extracted);
+        }
       }
 
-      const message = data.rawContent || data.response || '';
+      let message = aiText;
       if (!message) throw new Error('No response from AI');
+      if (command === 'fix') {
+        message =
+          message +
+          '\n\n_Code shown only — not applied to your project. Copy what you need, or use @create / @bug to apply._';
+      }
 
       addChatMessage('assistant', message);
     } catch (error) {
@@ -315,7 +343,6 @@ export default function ChatPanel() {
     }
   };
 
-  // ApiHealthStatus is only: 'online' | 'offline' | 'unknown'
   const online = apiStatus === 'online';
 
   const providers = Object.entries(PROVIDER_CONFIG || {}) as [
@@ -392,10 +419,12 @@ export default function ChatPanel() {
               <Bot className="w-7 h-7 text-indigo-300" />
             </div>
             <h3 className="text-base font-semibold text-white mb-1">How can I help?</h3>
-            <p className="text-[12px] text-slate-500 mb-6 max-w-[240px]">
-              Ask me to write code, fix bugs, or create pages for your project.
+            <p className="text-[12px] text-slate-500 mb-2 max-w-[260px]">
+              Use <span className="text-indigo-300">@fix</span>,{' '}
+              <span className="text-indigo-300">@create</span>, or{' '}
+              <span className="text-indigo-300">@bug</span> to control code application.
             </p>
-            <div className="flex flex-wrap gap-2 justify-center max-w-[300px]">
+            <div className="flex flex-wrap gap-2 justify-center max-w-[300px] mt-4">
               {AI_SUGGESTIONS.map((s) => (
                 <button
                   key={s.text}
@@ -475,13 +504,36 @@ export default function ChatPanel() {
       </div>
 
       <div className="shrink-0 p-3 border-t border-white/5 bg-[#0d1017]">
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {COMMAND_HINTS.map((h) => (
+            <button
+              key={h.cmd}
+              type="button"
+              title={h.desc}
+              onClick={() => {
+                setInput((prev) => {
+                  const t = prev.trim();
+                  if (!t) return h.cmd + ' ';
+                  if (/^@(fix|create|bug)\b/i.test(t)) {
+                    return t.replace(/^@(fix|create|bug)\b/i, h.cmd);
+                  }
+                  return h.cmd + ' ' + t;
+                });
+                inputRef.current?.focus();
+              }}
+              className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-white/5 border border-white/10 text-slate-400 hover:text-indigo-300 hover:border-indigo-500/30 transition"
+            >
+              {h.cmd}
+            </button>
+          ))}
+        </div>
         <div className="flex items-end gap-2 rounded-2xl bg-[#141820] border border-white/10 focus-within:border-indigo-500/40 transition px-3 py-2">
           <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask AI to write or fix code…"
+            placeholder="Try @fix, @create, or @bug …"
             rows={1}
             disabled={isLoading || isAiTyping}
             className="flex-1 bg-transparent text-[13px] text-slate-100 placeholder:text-slate-500 resize-none outline-none max-h-28 min-h-[24px] py-1"
