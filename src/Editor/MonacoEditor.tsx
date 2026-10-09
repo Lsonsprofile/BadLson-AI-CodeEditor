@@ -1,7 +1,7 @@
 // src/Editor/MonacoEditor.tsx
 import { useRef, useEffect, useCallback, useState } from 'react';
 import Editor from '@monaco-editor/react';
-import type { editor as MonacoEditorType, IDisposable, languages } from 'monaco-editor';
+import type { editor as MonacoEditorType, IDisposable } from 'monaco-editor';
 import { useWorkspaceStore } from '../store/workspaceStore';
 import { useEditorStore } from '../store/editorStore';
 import { getFileLanguage } from '../utils/formatter';
@@ -9,24 +9,28 @@ import { formatHTML, formatCSS, formatJS } from '../utils/formatter';
 import { getContent, getBlob, saveContent } from '../lib/fileStorage';
 import { useEditorShortcuts } from '../hooks/useEditorShortcuts';
 
-// ─── Previewable extensions (images + videos) ──────────────────────
+// ─── Previewable extensions (images + videos + audio) ─────────────
 const PREVIEW_EXTENSIONS = [
   // Images
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp',
   // Videos
   'mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv',
+  // Audio
+  'mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a',
 ];
 
-// ─── Helper: get MIME type from extension ──────────────────────────
 function getMimeType(ext: string): string {
   const extLower = ext.toLowerCase();
-  if (['png','jpg','jpeg','gif','webp','ico','bmp'].includes(extLower)) {
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp'].includes(extLower)) {
     return `image/${extLower === 'jpg' ? 'jpeg' : extLower}`;
   }
   if (extLower === 'svg') return 'image/svg+xml';
-  if (['mp4','webm','mov','avi','mkv','m4v','ogv'].includes(extLower)) {
+  if (['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv'].includes(extLower)) {
     return `video/${extLower === 'mov' ? 'quicktime' : extLower}`;
   }
+  if (extLower === 'mp3') return 'audio/mpeg';
+  if (extLower === 'm4a') return 'audio/mp4';
+  if (['wav', 'ogg', 'flac', 'aac'].includes(extLower)) return `audio/${extLower}`;
   return 'application/octet-stream';
 }
 
@@ -36,19 +40,14 @@ export default function MonacoEditorComponent() {
   const completionDisposableRef = useRef<IDisposable | null>(null);
   const saveTimeoutRef = useRef<number | null>(null);
 
-  const {
-    files,
-    activeFile,
-    updateFile,
-    editorOptions,
-  } = useWorkspaceStore();
-
+  const { files, activeFile, updateFile, editorOptions } = useWorkspaceStore();
   const { setEditor, setReady, setContext, setSelection } = useEditorStore();
   const editorInstance = useEditorStore((state) => state.editor);
 
   const [currentContent, setCurrentContent] = useState('');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isVideo, setIsVideo] = useState(false);
+  const [isAudio, setIsAudio] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const language = getFileLanguage(activeFile);
 
@@ -60,9 +59,11 @@ export default function MonacoEditorComponent() {
   const saveAllFiles = useCallback(async () => {
     const entries = Object.entries(files);
     await Promise.all(
-      entries.map(([path, content]) => saveContent(path, content).catch((error) => {
-        console.error(`[Monaco] Failed to save file ${path}:`, error);
-      }))
+      entries.map(([path, content]) =>
+        saveContent(path, content).catch((error) => {
+          console.error(`[Monaco] Failed to save file ${path}:`, error);
+        })
+      )
     );
   }, [files]);
 
@@ -120,96 +121,68 @@ export default function MonacoEditorComponent() {
     };
   }, [saveAllFiles, updateFile]);
 
-  // ── Preview loader (images + videos) ──────────────────────────────
+  // ── Preview loader (images + videos + audio ONLY) ────────────────
   useEffect(() => {
-    if (!activeFile) {
-      setPreviewUrl(null);
-      setIsVideo(false);
-      setPreviewError(null);
-      return;
-    }
+    setPreviewUrl(null);
+    setPreviewError(null);
+    setIsVideo(false);
+    setIsAudio(false);
+
+    if (!activeFile) return;
 
     const ext = activeFile.split('.').pop()?.toLowerCase() || '';
     const isPreviewable = PREVIEW_EXTENSIONS.includes(ext);
 
-    if (!isPreviewable) {
-      setPreviewUrl(null);
-      setIsVideo(false);
-      setPreviewError(null);
-      return;
-    }
+    // Text files (css, js, html, …) never use media preview
+    if (!isPreviewable) return;
 
-    const isVideoFile = ['mp4','webm','mov','avi','mkv','m4v','ogv'].includes(ext);
+    const isVideoFile = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv'].includes(ext);
+    const isAudioFile = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'].includes(ext);
     setIsVideo(isVideoFile);
+    setIsAudio(isAudioFile);
 
     let cancelled = false;
+    let objectUrl: string | null = null;
 
     const loadPreview = async () => {
       try {
-        console.log(`[Monaco] Loading preview for: ${activeFile} (${ext})`);
+        const mime = getMimeType(ext);
 
-        // 1) Check Zustand store (might be a data URL)
-        const zustandContent = (files as Record<string, string>)[activeFile];
-        if (typeof zustandContent === 'string' && zustandContent.length > 0) {
-          console.log(`[Monaco] Found in Zustand (length: ${zustandContent.length})`);
-          let url: string;
-          if (zustandContent.startsWith('data:')) {
-            url = zustandContent;
-          } else {
-            const mime = getMimeType(ext);
-            const blob = new Blob([zustandContent], { type: mime });
-            url = URL.createObjectURL(blob);
-          }
-          if (!cancelled) {
-            setPreviewUrl(url);
-            console.log(`[Monaco] Preview URL set from Zustand: ${url.substring(0, 30)}...`);
-          }
-          return;
-        }
-
-        // 2) Try IndexedDB content (text) – usually not for videos, but fallback
-        const content = await getContent(activeFile);
-        if (content && !cancelled) {
-          console.log(`[Monaco] Found in getContent (length: ${content.length})`);
-          let url: string;
-          if (content.startsWith('data:')) {
-            url = content;
-          } else {
-            const mime = getMimeType(ext);
-            const blob = new Blob([content], { type: mime });
-            url = URL.createObjectURL(blob);
-          }
-          if (!cancelled) {
-            setPreviewUrl(url);
-            console.log(`[Monaco] Preview URL set from getContent`);
-          }
-          return;
-        }
-
-        // 3) Try IndexedDB blob
-        console.log(`[Monaco] Attempting getBlob for: ${activeFile}`);
+        // 1) Real binary from IndexedDB
         const blob = await getBlob(activeFile);
-        if (blob && !cancelled) {
-          console.log(`[Monaco] Blob retrieved: size=${blob.size}, type=${blob.type}`);
-          if (blob.size === 0) {
-            console.warn(`[Monaco] Blob is empty (size 0) for ${activeFile}`);
-            setPreviewError('File is empty (0 bytes)');
-            return;
-          }
-          const mime = getMimeType(ext);
-          const typedBlob = new Blob([blob], { type: mime });
-          const url = URL.createObjectURL(typedBlob);
-          if (!cancelled) {
-            setPreviewUrl(url);
-            console.log(`[Monaco] Preview URL set from blob: ${url.substring(0, 30)}...`);
-          }
-        } else {
-          console.warn(`[Monaco] No blob found for: ${activeFile}`);
-          setPreviewError('No binary data found for this file');
+        if (cancelled) return;
+        if (blob && blob.size > 0) {
+          const typed = new Blob([blob], {
+            type: mime || blob.type || 'application/octet-stream',
+          });
+          objectUrl = URL.createObjectURL(typed);
+          setPreviewUrl(objectUrl);
+          setPreviewError(null);
+          return;
         }
+
+        // 2) Data URL in store
+        const zustandContent = (files as Record<string, string>)[activeFile];
+        if (typeof zustandContent === 'string' && zustandContent.startsWith('data:')) {
+          setPreviewUrl(zustandContent);
+          setPreviewError(null);
+          return;
+        }
+
+        const content = await getContent(activeFile);
+        if (cancelled) return;
+        if (content && content.startsWith('data:')) {
+          setPreviewUrl(content);
+          setPreviewError(null);
+          return;
+        }
+
+        setPreviewError('No binary data found for this file');
       } catch (err) {
-        console.error('[Monaco] Failed to load preview:', err);
-        setPreviewError(err instanceof Error ? err.message : 'Unknown error');
+        console.error('[Monaco] Failed to load media preview:', err);
+        if (!cancelled) {
+          setPreviewError(err instanceof Error ? err.message : 'Failed to load media');
+        }
       }
     };
 
@@ -217,36 +190,35 @@ export default function MonacoEditorComponent() {
 
     return () => {
       cancelled = true;
-      if (previewUrl && !previewUrl.startsWith('data:')) {
-        URL.revokeObjectURL(previewUrl);
-      }
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [activeFile, files, previewUrl]);
+  }, [activeFile, files]);
 
-  // ── Load text content ──────────────────────────────────────────────
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  // ── Load text content (non-media files) ────────────────────────────
   useEffect(() => {
     if (!activeFile) {
       setCurrentContent('');
       return;
     }
 
-    // If preview is loaded or error, don't load text
-    if (previewUrl !== null || previewError) return;
+    const ext = activeFile.split('.').pop()?.toLowerCase() || '';
+    const isPreviewable = PREVIEW_EXTENSIONS.includes(ext);
+
+    // Media files use the preview player, not the text editor
+    if (isPreviewable) return;
 
     const zustandContent = (files as Record<string, string>)[activeFile];
-    if (zustandContent !== undefined) {
+    if (zustandContent !== undefined && zustandContent !== '__BINARY__') {
       setCurrentContent(zustandContent);
       saveContent(activeFile, zustandContent).catch(console.error);
       return;
     }
 
     getContent(activeFile).then((content) => {
-      setCurrentContent(content || '');
+      setCurrentContent(content && content !== '__BINARY__' ? content : '');
     }).catch(console.error);
-  }, [activeFile, files, previewUrl, previewError]);
+  }, [activeFile, files]);
 
-  // ─── Register Mokai Dark theme (unchanged) ──────────────────────
   const defineMokaiTheme = useCallback((monaco: any) => {
     monaco.editor.defineTheme('mokai-dark', {
       base: 'vs-dark',
@@ -271,22 +243,10 @@ export default function MonacoEditorComponent() {
         'editorIndentGuide.background': '#404040',
         'editorIndentGuide.activeBackground': '#707070',
         'editorGutter.background': '#0a0a0a',
-        'editorGutter.modifiedBackground': '#0a0a0a',
-        'editorGutter.addedBackground': '#0a0a0a',
-        'editorGutter.deletedBackground': '#0a0a0a',
-      }
-    });
-    monaco.editor.defineTheme('vs-dark-mokai', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': '#0a0a0a',
-      }
+      },
     });
   }, []);
 
-  // ─── Register snippets (unchanged) ──────────────────────────────────
   const registerSnippets = useCallback((monaco: typeof import('monaco-editor')) => {
     if (completionDisposableRef.current) {
       completionDisposableRef.current.dispose();
@@ -318,31 +278,23 @@ export default function MonacoEditorComponent() {
 
     const provider = monaco.languages.registerCompletionItemProvider('html', {
       triggerCharacters: ['!'],
-      provideCompletionItems: (model, position, context) => {
+      provideCompletionItems: (_model, position, context) => {
         if (context.triggerCharacter !== '!') {
           return { suggestions: [] };
         }
-
         const range = {
           startLineNumber: position.lineNumber,
           startColumn: position.column - 1,
           endLineNumber: position.lineNumber,
           endColumn: position.column,
         };
-
-        return {
-          suggestions: [{
-            ...htmlBoilerplate,
-            range,
-          }],
-        };
+        return { suggestions: [{ ...htmlBoilerplate, range }] };
       },
     });
 
     completionDisposableRef.current = provider;
   }, []);
 
-  // ─── Apply theme (unchanged) ──────────────────────────────────
   useEffect(() => {
     if (monacoRef.current && editorRef.current) {
       const theme = editorOptions.theme || 'vs-dark';
@@ -354,71 +306,81 @@ export default function MonacoEditorComponent() {
     }
   }, [editorOptions.theme]);
 
-  // ─── Editor mount (unchanged) ──────────────────────────────────
-  const handleEditorDidMount = useCallback((editor: MonacoEditorType.IStandaloneCodeEditor, monaco: any) => {
-    editorRef.current = editor;
-    monacoRef.current = monaco;
+  const handleEditorDidMount = useCallback(
+    (editor: MonacoEditorType.IStandaloneCodeEditor, monaco: any) => {
+      editorRef.current = editor;
+      monacoRef.current = monaco;
 
-    defineMokaiTheme(monaco);
-    registerSnippets(monaco);
+      defineMokaiTheme(monaco);
+      registerSnippets(monaco);
 
-    const initialTheme = editorOptions.theme || 'vs-dark';
-    monaco.editor.setTheme(initialTheme);
+      const initialTheme = editorOptions.theme || 'vs-dark';
+      monaco.editor.setTheme(initialTheme);
 
-    setEditor(editor);
-    setReady(true);
+      setEditor(editor);
+      setReady(true);
 
-    // ─── AI CONTEXT ───────────────────────────────────────────────────
-    const updateContext = () => {
-      const model = editor.getModel();
-      if (!model) return;
+      const updateContext = () => {
+        const model = editor.getModel();
+        if (!model) return;
 
-      const selection = editor.getSelection();
-      const selectedText = selection ? model.getValueInRange(selection) : '';
-      const cursor = editor.getPosition();
+        const selection = editor.getSelection();
+        const selectedText = selection ? model.getValueInRange(selection) : '';
+        const cursor = editor.getPosition();
 
-      setContext({
-        activeFile: activeFileRef.current || '',
-        language: model.getLanguageId(),
-        selectedText: selectedText || '',
-        fullText: model.getValue(),
-        cursor: {
-          line: cursor?.lineNumber || 1,
-          column: cursor?.column || 1,
-        },
+        setContext({
+          activeFile: activeFileRef.current || '',
+          language: model.getLanguageId(),
+          selectedText: selectedText || '',
+          fullText: model.getValue(),
+          cursor: {
+            line: cursor?.lineNumber || 1,
+            column: cursor?.column || 1,
+          },
+        });
+
+        if (selection) {
+          setSelection({
+            startLineNumber: selection.startLineNumber,
+            startColumn: selection.startColumn,
+            endLineNumber: selection.endLineNumber,
+            endColumn: selection.endColumn,
+          });
+        } else {
+          setSelection(null);
+        }
+      };
+
+      const selectionDisposable = editor.onDidChangeCursorSelection(updateContext);
+      const positionDisposable = editor.onDidChangeCursorPosition(updateContext);
+      const blurDisposable = editor.onDidBlurEditorWidget(() => {
+        setContext(null);
+        setSelection(null);
       });
 
-      if (selection) {
-        setSelection({
-          startLineNumber: selection.startLineNumber,
-          startColumn: selection.startColumn,
-          endLineNumber: selection.endLineNumber,
-          endColumn: selection.endColumn,
-        });
-      } else {
-        setSelection(null);
-      }
-    };
-
-    const selectionDisposable = editor.onDidChangeCursorSelection(updateContext);
-    const positionDisposable = editor.onDidChangeCursorPosition(updateContext);
-    const blurDisposable = editor.onDidBlurEditorWidget(() => {
-      setContext(null);
-      setSelection(null);
-    });
-
-    return () => {
-      selectionDisposable.dispose();
-      positionDisposable.dispose();
-      blurDisposable.dispose();
-      setEditor(null);
-      setReady(false);
-      if (completionDisposableRef.current) {
-        completionDisposableRef.current.dispose();
-        completionDisposableRef.current = null;
-      }
-    };
-  }, [activeFile, updateFile, setEditor, setReady, setContext, setSelection, defineMokaiTheme, registerSnippets, editorOptions.theme]);
+      return () => {
+        selectionDisposable.dispose();
+        positionDisposable.dispose();
+        blurDisposable.dispose();
+        setEditor(null);
+        setReady(false);
+        if (completionDisposableRef.current) {
+          completionDisposableRef.current.dispose();
+          completionDisposableRef.current = null;
+        }
+      };
+    },
+    [
+      updateFile,
+      setEditor,
+      setReady,
+      setContext,
+      setSelection,
+      defineMokaiTheme,
+      registerSnippets,
+      editorOptions.theme,
+    ]
+  );
 
   const handleChange = useCallback(
     (value: string | undefined) => {
@@ -458,20 +420,41 @@ export default function MonacoEditorComponent() {
     );
   }
 
-  // ─── Preview (image or video) ────────────────────────────────────
+  // ─── Media preview (image / video / audio) ───────────────────────
   if (previewUrl !== null) {
     if (isVideo) {
       return (
-        <div className="flex-1 bg-[#0a0a0a] flex items-center justify-center p-4">
+        <div className="flex-1 bg-[#0a0a0a] flex flex-col items-center justify-center p-4 gap-3">
           <video
+            key={previewUrl}
             src={previewUrl}
             controls
-            autoPlay={false}
-            className="max-w-full max-h-full rounded-lg shadow-lg"
-            onError={(e) => {
-              console.error('[Monaco] Video playback error:', e);
+            playsInline
+            preload="metadata"
+            className="max-w-full max-h-[80vh] rounded-lg shadow-lg bg-black"
+            onError={() => {
+              setPreviewError('Video playback failed – re-import or use MP4 (H.264)');
               setPreviewUrl(null);
-              setPreviewError('Video playback failed – likely unsupported codec or corrupted file');
+            }}
+          />
+          <p className="text-[11px] text-slate-500">{activeFile}</p>
+        </div>
+      );
+    }
+    if (isAudio) {
+      return (
+        <div className="flex-1 bg-[#0a0a0a] flex flex-col items-center justify-center p-4 gap-4">
+          <div className="text-4xl">🎵</div>
+          <p className="text-sm text-slate-300">{activeFile}</p>
+          <audio
+            key={previewUrl}
+            src={previewUrl}
+            controls
+            preload="metadata"
+            className="w-full max-w-md"
+            onError={() => {
+              setPreviewError('Audio playback failed – re-import the file');
+              setPreviewUrl(null);
             }}
           />
         </div>
@@ -489,15 +472,17 @@ export default function MonacoEditorComponent() {
     );
   }
 
-  // ─── Show error (if preview failed) ──────────────────────────────
-  if (previewError) {
+  // ─── Media preview error (ONLY for image/video/audio) ────────────
+  const activeExt = activeFile.split('.').pop()?.toLowerCase() || '';
+  const isMediaFile = PREVIEW_EXTENSIONS.includes(activeExt);
+  if (previewError && isMediaFile) {
     return (
       <div className="flex-1 bg-[#0a0a0a] flex items-center justify-center p-4">
         <div className="text-center text-slate-400">
-          <div className="text-sm font-medium text-red-400 mb-2">⚠️ Preview Error</div>
+          <div className="text-sm font-medium text-red-400 mb-2">Preview Error</div>
           <div className="text-xs text-slate-500">{previewError}</div>
           <div className="text-xs text-slate-600 mt-2">
-            {activeFile} – try re-importing the file
+            {activeFile} – re-import the file (Import → File)
           </div>
         </div>
       </div>
@@ -526,41 +511,7 @@ export default function MonacoEditorComponent() {
           scrollBeyondLastLine: false,
           automaticLayout: true,
           padding: { top: 8 },
-          mouseWheelScrollSensitivity: 1,
-          smoothScrolling: true,
-          scrollbar: {
-            alwaysConsumeMouseWheel: true,
-            vertical: 'visible',
-            horizontal: 'auto',
-          },
-          renderWhitespace: 'selection',
-          bracketPairColorization: { enabled: true },
-          guides: {
-            bracketPairs: true,
-            indentation: true,
-          },
-          folding: true,
-          foldingHighlight: true,
-          unfoldOnClickAfterEndOfLine: true,
-          matchBrackets: 'always',
-          autoClosingBrackets: 'always',
-          autoClosingQuotes: 'always',
-          formatOnPaste: true,
-          formatOnType: true,
-          cursorBlinking: 'smooth',
-          cursorSmoothCaretAnimation: 'on',
-          contextmenu: true,
-          multiCursorModifier: 'ctrlCmd',
-          quickSuggestions: true,
-          suggestOnTriggerCharacters: true,
-          acceptSuggestionOnEnter: 'on',
-          snippetSuggestions: 'inline',
         }}
-        loading={
-          <div className="flex items-center justify-center h-full text-slate-500 text-xs">
-            Loading editor...
-          </div>
-        }
       />
     </div>
   );
