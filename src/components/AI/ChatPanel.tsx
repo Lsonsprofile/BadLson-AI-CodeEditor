@@ -63,7 +63,9 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
       await navigator.clipboard.writeText(code);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   };
   return (
     <div className="my-2 rounded-xl overflow-hidden border border-white/10 bg-[#0c0f14]">
@@ -107,9 +109,10 @@ function MessageContent({ content }: { content: string }) {
     const tag = (match[1] || '').trim();
     const code = match[2].trim();
     if (!tag.startsWith('wireframe:')) {
-      const label = tag.startsWith('edit:') || tag.startsWith('patch:')
-        ? tag.replace(/^(edit|patch):/, '')
-        : tag || 'code';
+      const label =
+        tag.startsWith('edit:') || tag.startsWith('patch:')
+          ? tag.replace(/^(edit|patch):/, '')
+          : tag || 'code';
       parts.push(<CodeBlock key={`c-${match.index}`} code={code} language={label} />);
     }
     lastIndex = match.index + match[0].length;
@@ -266,8 +269,11 @@ export default function ChatPanel() {
         throw new Error(errorText || `HTTP ${response.status}`);
       }
 
-      const backendResponse = (await response.json()) as ChatResponse | { success: boolean; data: ChatResponse };
-      const data = ((backendResponse as any).data ?? backendResponse) as ChatResponse;
+      const backendResponse = (await response.json()) as
+        | ChatResponse
+        | { success: boolean; data: ChatResponse };
+      const data = ((backendResponse as { data?: ChatResponse }).data ??
+        backendResponse) as ChatResponse;
 
       if (!data.success) throw new Error(data.error || 'AI request failed');
 
@@ -304,14 +310,13 @@ export default function ChatPanel() {
       await navigator.clipboard.writeText(text);
       setCopiedIdx(idx);
       setTimeout(() => setCopiedIdx(null), 1500);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   };
 
-  const online =
-    apiStatus === 'online' ||
-    apiStatus === 'ok' ||
-    apiStatus === true ||
-    String(apiStatus) === 'online';
+  // ApiHealthStatus is only: 'online' | 'offline' | 'unknown'
+  const online = apiStatus === 'online';
 
   const providers = Object.entries(PROVIDER_CONFIG || {}) as [
     AiProviderKey,
@@ -320,7 +325,6 @@ export default function ChatPanel() {
 
   return (
     <div className="h-full w-full flex flex-col bg-[#0a0c10] text-slate-100">
-      {/* Header */}
       <div className="shrink-0 px-4 py-3 border-b border-white/5 flex items-center justify-between bg-[#0d1017]">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
@@ -364,11 +368,11 @@ export default function ChatPanel() {
                       {cfg.label || cfg.name || key}
                     </button>
                   ))
-                : ['openrouter', 'groq', 'gemini'].map((key) => (
+                : (['openrouter', 'groq', 'gemini'] as AiProviderKey[]).map((key) => (
                     <button
                       key={key}
                       onClick={() => {
-                        setAiProvider({ ...aiProvider, provider: key as AiProviderKey });
+                        setAiProvider({ ...aiProvider, provider: key });
                         setIsDropdownOpen(false);
                       }}
                       className="w-full text-left px-3 py-2 text-[11px] text-slate-300 hover:bg-white/5 capitalize"
@@ -381,7 +385,6 @@ export default function ChatPanel() {
         </div>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
         {chatHistory.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center px-4 text-center">
@@ -471,7 +474,6 @@ export default function ChatPanel() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
       <div className="shrink-0 p-3 border-t border-white/5 bg-[#0d1017]">
         <div className="flex items-end gap-2 rounded-2xl bg-[#141820] border border-white/10 focus-within:border-indigo-500/40 transition px-3 py-2">
           <textarea
@@ -487,7 +489,7 @@ export default function ChatPanel() {
             onInput={(e) => {
               const t = e.currentTarget;
               t.style.height = 'auto';
-              t.style.height = Math.min(t.scrollHeight, 112) + 'px';
+              t.style.height = `${Math.min(t.scrollHeight, 112)}px`;
             }}
           />
           <button
