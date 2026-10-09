@@ -18,6 +18,15 @@ const PREVIEW_SANDBOX =
 const PREVIEW_ALLOW =
   'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen; web-share';
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 export default function LivePreview() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -117,12 +126,19 @@ export default function LivePreview() {
       typeFromExtension.startsWith('audio/') ||
       typeFromExtension.startsWith('font/');
 
-    // Always try blob store first for media
+    // Use data: URLs so media works inside srcdoc iframes (blob: often blocked)
     if (isBinary) {
       const blob = await getBlob(resolved);
       if (blob && blob.size > 0) {
-        const typedBlob = new Blob([blob], { type: typeFromExtension || blob.type });
-        return URL.createObjectURL(typedBlob);
+        const typedBlob = new Blob([blob], {
+          type: typeFromExtension || blob.type || 'application/octet-stream',
+        });
+        try {
+          const dataUrl = await blobToDataUrl(typedBlob);
+          if (dataUrl) return dataUrl;
+        } catch (err) {
+          console.error('[Preview] data URL failed', resolved, err);
+        }
       }
     }
 
