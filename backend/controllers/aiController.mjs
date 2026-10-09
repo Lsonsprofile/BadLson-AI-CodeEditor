@@ -19,6 +19,7 @@ export async function handleChat({
   buildErrors = [],
   selectedCode = null,
   cursorPosition = null,
+  folders = [],
 }) {
   console.log(
     `[AI Controller] handleChat | msg="${(message || '').substring(0, 60)}" | files=${Object.keys(projectFiles).length} | provider=${provider}`
@@ -53,6 +54,7 @@ export async function handleChat({
     cursorPosition,
     selectedCode,
     chatHistory,
+    folders,
   });
 
   let response;
@@ -87,7 +89,6 @@ export async function handleChat({
   let failedEdits = [];
   const changedOnly = {};
 
-  // @fix / explain / general: never auto-apply file changes
   const skipApply = mode === 'fix' || mode === 'explain' || mode === 'general';
 
   if (
@@ -165,13 +166,8 @@ export async function handleStream(args) {
   try {
     const result = await handleChat(chatArgs);
     const text = result.content || result.response || '';
-    if (typeof onChunk === 'function' && text) {
-      // Send as one chunk for compatibility with SSE route
-      onChunk(text);
-    }
-    if (typeof onComplete === 'function') {
-      onComplete(result);
-    }
+    if (typeof onChunk === 'function' && text) onChunk(text);
+    if (typeof onComplete === 'function') onComplete(result);
     return result;
   } catch (error) {
     if (typeof onComplete === 'function') {
@@ -184,7 +180,6 @@ export async function handleStream(args) {
   }
 }
 
-/** Analyze project / code — wraps chat with an analysis prompt */
 export async function handleAnalyze(body = {}) {
   const message =
     body.message ||
@@ -196,7 +191,6 @@ export async function handleAnalyze(body = {}) {
   });
 }
 
-/** Explain selected code or a concept — wraps chat */
 export async function handleExplain(body = {}) {
   const code = body.code || body.selectedCode || '';
   const question = body.message || body.question || 'Explain this code clearly.';
