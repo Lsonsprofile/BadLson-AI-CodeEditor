@@ -1,7 +1,7 @@
 // src/components/Preview/LivePreview.tsx
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
-import { getContent, getBlob } from '../../lib/fileStorage';
+import { getContent, getBlob, BINARY_MARKER } from '../../lib/fileStorage';
 import {
   Globe,
   RefreshCw,
@@ -85,14 +85,21 @@ export default function LivePreview() {
 
   const getFileContentAsync = async (relativePath: string, baseFolder: string): Promise<string> => {
     const resolvedFile = resolveRelativePath(relativePath, baseFolder);
-    if (resolvedFile && files[resolvedFile] !== undefined) return files[resolvedFile] as string;
+    if (resolvedFile && files[resolvedFile] !== undefined) {
+      const v = files[resolvedFile] as string;
+      if (v && v !== BINARY_MARKER) return v;
+    }
     const rootResolved = normalizeFilePath(relativePath);
-    if (files[rootResolved] !== undefined) return files[rootResolved] as string;
+    if (files[rootResolved] !== undefined) {
+      const v = files[rootResolved] as string;
+      if (v && v !== BINARY_MARKER) return v;
+    }
     if (resolvedFile) {
       const content = await getContent(resolvedFile);
-      if (content !== null) return content;
+      if (content && content !== BINARY_MARKER) return content;
     }
-    return (await getContent(rootResolved)) || '';
+    const root = await getContent(rootResolved);
+    return root && root !== BINARY_MARKER ? root : '';
   };
 
   const getLocalDataUrlAsync = async (
@@ -110,17 +117,22 @@ export default function LivePreview() {
       typeFromExtension.startsWith('audio/') ||
       typeFromExtension.startsWith('font/');
 
+    // Always try blob store first for media
     if (isBinary) {
       const blob = await getBlob(resolved);
-      if (blob) {
-        const typedBlob = new Blob([blob], { type: typeFromExtension });
+      if (blob && blob.size > 0) {
+        const typedBlob = new Blob([blob], { type: typeFromExtension || blob.type });
         return URL.createObjectURL(typedBlob);
       }
     }
 
     const fileContent = files[resolved] as string | undefined;
-    const dbContent = fileContent !== undefined ? fileContent : await getContent(resolved);
-    if (!dbContent) return null;
+    const usable =
+      fileContent && fileContent !== BINARY_MARKER && fileContent.length > 0
+        ? fileContent
+        : null;
+    const dbContent = usable ?? (await getContent(resolved));
+    if (!dbContent || dbContent === BINARY_MARKER) return null;
 
     if (dbContent.startsWith('data:') || dbContent.startsWith('blob:')) return dbContent;
 
@@ -131,14 +143,6 @@ export default function LivePreview() {
       typeFromExtension.includes('svg')
     ) {
       return `data:${typeFromExtension};charset=utf-8,${encodeURIComponent(dbContent)}`;
-    }
-
-    try {
-      if (/^[A-Za-z0-9+/=]+$/.test(dbContent.slice(0, 80)) && dbContent.length > 100) {
-        return `data:${typeFromExtension};base64,${dbContent}`;
-      }
-    } catch {
-      /* ignore */
     }
 
     return null;
@@ -221,8 +225,7 @@ export default function LivePreview() {
       }
     }
 
-    // Help playback UX
-    result = result.replace(/<video(?![^>]*\bcontrols\b)/gi, '<video controls');
+    result = result.replace(/<video(?![^>]*\bcontrols\b)/gi, '<video controls playsinline');
     result = result.replace(/<audio(?![^>]*\bcontrols\b)/gi, '<audio controls');
 
     return result;
@@ -243,7 +246,11 @@ export default function LivePreview() {
     const htmlPath = findPreviewHtmlPath();
     let html = '';
     if (htmlPath) {
-      html = (files[htmlPath] as string) || (await getContent(htmlPath)) || '';
+      const fromStore = files[htmlPath] as string;
+      html =
+        (fromStore && fromStore !== BINARY_MARKER ? fromStore : '') ||
+        (await getContent(htmlPath)) ||
+        '';
     }
     const baseFolder = htmlPath ? getFolderPath(htmlPath) : '';
 
@@ -378,55 +385,27 @@ export default function LivePreview() {
           <Globe className="w-3.5 h-3.5 text-slate-400" />
           <span className="text-[11px] font-semibold text-[#c9d1d9]">Preview</span>
           <div className="flex items-center gap-0.5 ml-1">
-            <button
-              onClick={() => setPreviewDevice('mobile')}
-              className={btnClass(previewDevice === 'mobile')}
-              title="Mobile"
-            >
+            <button onClick={() => setPreviewDevice('mobile')} className={btnClass(previewDevice === 'mobile')} title="Mobile">
               <Smartphone className="w-3.5 h-3.5" />
             </button>
-            <button
-              onClick={() => setPreviewDevice('tablet')}
-              className={btnClass(previewDevice === 'tablet')}
-              title="Tablet"
-            >
+            <button onClick={() => setPreviewDevice('tablet')} className={btnClass(previewDevice === 'tablet')} title="Tablet">
               <Tablet className="w-3.5 h-3.5" />
             </button>
-            <button
-              onClick={() => setPreviewDevice('desktop')}
-              className={btnClass(previewDevice === 'desktop')}
-              title="Desktop"
-            >
+            <button onClick={() => setPreviewDevice('desktop')} className={btnClass(previewDevice === 'desktop')} title="Desktop">
               <Monitor className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
         <div className="flex items-center gap-0.5">
-          <button
-            onClick={handleRefresh}
-            className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700/50 transition"
-            title="Refresh preview"
-          >
+          <button onClick={handleRefresh} className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700/50 transition" title="Refresh preview">
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
-          <button
-            onClick={handleOpenNewPage}
-            className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700/50 transition"
-            title="Open in new page"
-          >
+          <button onClick={handleOpenNewPage} className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700/50 transition" title="Open in new page">
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
-          <button
-            onClick={handleFullscreen}
-            className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700/50 transition"
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          >
-            {isFullscreen ? (
-              <Minimize2 className="w-3.5 h-3.5" />
-            ) : (
-              <Maximize2 className="w-3.5 h-3.5" />
-            )}
+          <button onClick={handleFullscreen} className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700/50 transition" title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
