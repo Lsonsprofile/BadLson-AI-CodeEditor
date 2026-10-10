@@ -25,6 +25,7 @@ runIfExists('wire-file-context.mjs');
 runIfExists('fix-chat-clear-button.mjs');
 runIfExists('fix-chat-folders.mjs');
 runIfExists('fix-file-panel-design.mjs');
+runIfExists('fix-multi-download.mjs');
 runIfExists('fix-import.mjs');
 runIfExists('fix-video-playback.mjs');
 runIfExists('fix-chat-show-code.mjs');
