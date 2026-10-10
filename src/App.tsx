@@ -41,6 +41,7 @@ function StatusBar() {
         <span>{chars} chars</span>
         <span className="text-indigo-400">UTF-8</span>
         <span>Spaces: 2</span>
+        <span className="text-emerald-400/70">AutoSync Active</span>
       </div>
       <div className="flex items-center gap-3">
         {sidebarVisible && <span>Explorer</span>}
@@ -71,6 +72,7 @@ function AppLayout() {
         email: user.email,
         displayName: user.name,
       });
+
       try {
         const savedState = localStorage.getItem('workspace_state');
         if (savedState) {
@@ -102,6 +104,7 @@ function AppLayout() {
         chatHistory,
         isAiTyping,
       } = state;
+
       try {
         localStorage.setItem(
           'workspace_state',
@@ -120,11 +123,11 @@ function AppLayout() {
             isAiTyping,
           })
         );
-      } catch {
-        /* ignore quota */
+      } catch (error) {
+        console.error('Failed to save workspace state:', error);
       }
     }
-  });
+  }, [authUser?.uid]);
 
   useEffect(() => {
     const handleToggleSettings = () => setShowSettings((prev) => !prev);
@@ -141,10 +144,10 @@ function AppLayout() {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (draggingSidebar) {
-        setSidebarWidth(Math.max(220, Math.min(400, e.clientX));
+        setSidebarWidth(Math.max(220, Math.min(400, e.clientX)));
       }
       if (draggingAi) {
-        setAiWidth(Math.max(240, Math.min(420, window.innerWidth - e.clientX - 80));
+        setAiWidth(Math.max(240, Math.min(420, window.innerWidth - e.clientX - 80)));
       }
     };
 
@@ -161,49 +164,58 @@ function AppLayout() {
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     }
+
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
   }, [draggingSidebar, draggingAi]);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#0a0c10] text-slate-100 overflow-hidden">
-      <Header
-        onOpenSettings={() => setShowSettings(true)}
-        onOpenAccount={() => setShowAccount(true)}
-      />
-      <div className="flex-1 flex min-h-0 relative">
+    <div className="min-h-screen h-screen flex flex-col bg-[#0b0f19] text-slate-300 overflow-hidden">
+      <Header />
+
+      <main className="flex-1 flex min-h-0 overflow-hidden">
         {sidebarVisible && (
           <>
-            <aside style={{ width: sidebarWidth }} className="shrink-0 border-r border-white/5 bg-[#0a0c10] overflow-hidden">
-              <FileExplorer />
-            </aside>
             <div
-              className="w-1 cursor-col-resize hover:bg-indigo-500/40 transition-colors shrink-0"
+              style={{ width: sidebarWidth }}
+              className="shrink-0 min-w-[220px] max-w-[400px] border-r border-white/10 overflow-hidden flex flex-col"
+            >
+              <FileExplorer />
+            </div>
+            <div
               onMouseDown={() => setDraggingSidebar(true)}
+              className="w-1.5 shrink-0 bg-[#1e293b] hover:bg-indigo-600/60 cursor-col-resize transition"
             />
           </>
         )}
-        <main className="flex-1 min-w-0 overflow-hidden">
-          <Workspace />
-        </main>
+
+        <Workspace />
+
         {aiPanelVisible && (
           <>
             <div
-              className="w-1 cursor-col-resize hover:bg-indigo-500/40 transition-colors shrink-0"
               onMouseDown={() => setDraggingAi(true)}
+              className="w-1.5 shrink-0 bg-[#1e293b] hover:bg-indigo-600/60 cursor-col-resize transition"
             />
-            <aside style={{ width: aiWidth }} className="shrink-0 border-l border-white/5 bg-[#0a0c10] overflow-hidden">
+            <div
+              style={{ width: aiWidth }}
+              className="shrink-0 min-w-[240px] max-w-[420px] overflow-hidden min-h-0 h-full"
+            >
               <ChatPanel />
-            </aside>
+            </div>
           </>
         )}
-      </div>
+      </main>
+
       <StatusBar />
-      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
-      {showAccount && <AccountModal onClose={() => setShowAccount(false)} />}
       <Toast />
+
+      {showSettings && <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />}
+      {showAccount && <AccountModal isOpen={showAccount} onClose={() => setShowAccount(false)} />}
     </div>
   );
 }
@@ -211,7 +223,7 @@ function AppLayout() {
 export default function App() {
   return (
     <Routes>
-      <Route path="/*" element={<AppLayout />} />
+      <Route path="*" element={<AppLayout />} />
     </Routes>
   );
 }
