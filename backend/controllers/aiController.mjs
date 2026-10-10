@@ -32,7 +32,7 @@ export async function handleChat({
     );
   if (isGreeting) {
     const greetingText =
-      "Hello! I'm your AI coding assistant. Use @fix, @create, or @bug to control how code is applied. What do you need?";
+      "Hello! I'm your AI coding assistant. I suggest code in chat — click Apply on a code block to write it into your project. What do you need?";
     return {
       success: true,
       content: greetingText,
@@ -89,7 +89,8 @@ export async function handleChat({
   let failedEdits = [];
   const changedOnly = {};
 
-  const skipApply = mode === 'fix' || mode === 'explain' || mode === 'general';
+  // Client applies only when user clicks Apply — do not auto-merge server-side
+  const skipApply = true;
 
   if (
     !skipApply &&
@@ -187,7 +188,7 @@ export async function handleAnalyze(body = {}) {
     'Analyze this project. Summarize structure, main files, and suggest improvements.';
   return handleChat({
     ...body,
-    message: `@fix ${message}`,
+    message,
   });
 }
 
