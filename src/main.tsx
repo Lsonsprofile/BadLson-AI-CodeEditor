@@ -1,36 +1,72 @@
+import { Component, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router";
+import { BrowserRouter } from "react-router-dom";
 import "./index.css";
 import App from "./App";
 
-// Suppress non-critical console noise
-const originalWarn = console.warn;
-const originalError = console.error;
+class RootErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
 
-console.warn = (...args: any[]) => {
-  const msg = typeof args[0] === 'string' ? args[0] : '';
-  if (
-    msg.includes('sandbox') ||
-    msg.includes('Violation') ||
-    msg.includes('handler took') ||
-    msg.includes('React Router Future')
-  ) return;
-  originalWarn.apply(console, args);
-};
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
 
-console.error = (...args: any[]) => {
-  const msg = typeof args[0] === 'string' ? args[0] : '';
-  if (
-    msg.includes('woff2') ||
-    msg.includes('net::ERR_ABORTED') ||
-    msg.includes('favicon') ||
-    msg.includes('Failed to load resource')
-  ) return;
-  originalError.apply(console, args);
-};
+  render() {
+    if (this.state.error) {
+      return (
+        <div
+          style={{
+            minHeight: "100vh",
+            background: "#0a0c10",
+            color: "#e2e8f0",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontFamily: "system-ui, sans-serif",
+            padding: 24,
+            textAlign: "center",
+          }}
+        >
+          <div>
+            <h1 style={{ fontSize: 18, marginBottom: 8 }}>Something went wrong</h1>
+            <p style={{ fontSize: 13, color: "#94a3b8", maxWidth: 420 }}>
+              {this.state.error.message}
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              style={{
+                marginTop: 16,
+                padding: "8px 14px",
+                borderRadius: 8,
+                border: "1px solid #334155",
+                background: "#1e293b",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              Reload
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
-createRoot(document.getElementById("root")!).render(
-  <BrowserRouter>
-    <App />
-  </BrowserRouter>
+const rootEl = document.getElementById("root");
+if (!rootEl) {
+  throw new Error("Root element #root not found");
+}
+
+createRoot(rootEl).render(
+  <RootErrorBoundary>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </RootErrorBoundary>
 );
