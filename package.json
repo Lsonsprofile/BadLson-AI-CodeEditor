@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "vite build",
     "build:backend": "cd backend && npm install",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -30,7 +30,7 @@
     "clean": "rm -rf node_modules package-lock.json && npm install",
     "audit": "npm audit",
     "security-check": "npm audit --production",
-    "postinstall": "cd backend && npm install && node ../scripts/wire-ai-prompts.mjs && node ../scripts/wire-file-context.mjs && node ../scripts/wire-ai-commands.mjs"
+    "postinstall": "cd backend && npm install"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
@@ -98,7 +98,6 @@
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.19",
     "globals": "^15.15.0",
-    "kimi-plugin-inspect-react": "^0.1.0",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.7.2",
