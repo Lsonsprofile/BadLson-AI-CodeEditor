@@ -133,9 +133,10 @@ if (!s.includes('contextMenu.root') && !s.includes('Paste Into Folder')) {
   s = s.replace(/contextMenu\.node\.type === 'file'/g, "contextMenu.node?.type === 'file'");
   s = s.replace(/contextMenu\.node\.type === 'folder'/g, "contextMenu.node?.type === 'folder'");
 
-  const fpOld = `onClick={() => handlePaste(contextMenu.node!.name)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste Here`;
-  const fpNew = `onClick={() => handlePaste(contextMenu.node!.name)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste Into Folder\n                </button>\n                <button\n                  onClick={() => handlePaste(null)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root`;
-  if (s.includes(fpOld)) { s = s.replace(fpOld, fpNew); n++; console.log('✓ folder paste root'); }
+  // Wrap multi-button paste block in a fragment so JSX is valid
+  const blockOld = `{clipboard.items.length > 0 && (\n                <button\n                  onClick={() => handlePaste(contextMenu.node!.name)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste Here\n                </button>\n              )}`;
+  const blockNew = `{clipboard.items.length > 0 && (\n                <>\n                  <button\n                    onClick={() => handlePaste(contextMenu.node!.name)}\n                    className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                  >\n                    <ClipboardPaste className="w-3.5 h-3.5" /> Paste Into Folder\n                  </button>\n                  <button\n                    onClick={() => handlePaste(null)}\n                    className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                  >\n                    <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                  </button>\n                </>\n              )}`;
+  if (s.includes(blockOld)) { s = s.replace(blockOld, blockNew); n++; console.log('✓ folder paste root'); }
 
   const cmOld = `{contextMenu.node && (\n        <div\n          ref={contextMenuRef}\n          className="fixed z-50 bg-[#161b22] border border-[#30363d] rounded-md shadow-xl py-1 w-44"`;
   const cmNew = `{(contextMenu.node || contextMenu.root) && (\n        <div\n          ref={contextMenuRef}\n          className="fixed z-50 bg-[#161b22] border border-[#30363d] rounded-md shadow-xl py-1 w-48"`;
@@ -149,7 +150,8 @@ if (!s.includes('contextMenu.root') && !s.includes('Paste Into Folder')) {
   if (!s.includes('root: true')) {
     const m = s.match(/<div\s+ref=\{scrollContainerRef\}[^>]*>/);
     if (m && !m[0].includes('onContextMenu')) {
-      s = s.replace(m[0], m[0].slice(0, -1) + ` onContextMenu={(e) => {\n          if ((e.target as HTMLElement).closest('[data-tree-item]')) return;\n          e.preventDefault();\n          setContextMenu({ x: e.clientX, y: e.clientY, node: null, root: true });\n        }>`);
+      // Must close with }}>  (function body } + JSX expr } + tag >)
+      s = s.replace(m[0], m[0].slice(0, -1) + ` onContextMenu={(e) => {\n          if ((e.target as HTMLElement).closest('[data-tree-item]')) return;\n          e.preventDefault();\n          setContextMenu({ x: e.clientX, y: e.clientY, node: null, root: true });\n        }}>`);
       n++; console.log('✓ empty area menu');
     }
   }
@@ -162,6 +164,15 @@ if (!s.includes('contextMenu.root') && !s.includes('Paste Into Folder')) {
   const nodeOpen = `      node,\n    });\n  }, []);\n\n  // ── Copy / Paste / Download`;
   const nodeOpenFix = `      node,\n      root: false,\n    });\n  }, []);\n\n  // ── Copy / Paste / Download`;
   if (s.includes(nodeOpen)) { s = s.replace(nodeOpen, nodeOpenFix); n++; console.log('✓ node root:false'); }
+}
+
+// Fix invalid JSX: two buttons under && without fragment
+const broken = `{clipboard.items.length > 0 && (\n                <button\n                  onClick={() => handlePaste(contextMenu.node!.name)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste Into Folder\n                </button>\n                <button\n                  onClick={() => handlePaste(null)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                </button>\n              )}`;
+const fixed = `{clipboard.items.length > 0 && (\n                <>\n                  <button\n                    onClick={() => handlePaste(contextMenu.node!.name)}\n                    className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                  >\n                    <ClipboardPaste className="w-3.5 h-3.5" /> Paste Into Folder\n                  </button>\n                  <button\n                    onClick={() => handlePaste(null)}\n                    className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                  >\n                    <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                  </button>\n                </>\n              )}`;
+if (s.includes(broken)) {
+  s = s.replace(broken, fixed);
+  n++;
+  console.log('✓ fragment wrap paste buttons');
 }
 
 fs.writeFileSync(target, s);
