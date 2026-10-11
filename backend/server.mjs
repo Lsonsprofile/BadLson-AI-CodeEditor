@@ -29,14 +29,18 @@ app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 5002;
 
-console.log('=== ENV DEBUG ===');
-console.log('JWT_SECRET exists?', !!process.env.JWT_SECRET);
-console.log('GROQ_API_KEY exists?', !!process.env.GROQ_API_KEY);
-console.log('GEMINI_API_KEY exists?', !!process.env.GEMINI_API_KEY);
-console.log('OPENROUTER_API_KEY exists?', !!process.env.OPENROUTER_API_KEY);
-console.log('NODE_ENV:', process.env.NODE_ENV || 'development');
-console.log('PORT:', PORT);
-console.log('=================');
+if (process.env.NODE_ENV !== 'production') {
+  console.log('=== ENV DEBUG ===');
+  console.log('JWT_SECRET exists?', !!process.env.JWT_SECRET);
+  console.log('GROQ_API_KEY exists?', !!process.env.GROQ_API_KEY);
+  console.log('GEMINI_API_KEY exists?', !!process.env.GEMINI_API_KEY);
+  console.log('OPENROUTER_API_KEY exists?', !!process.env.OPENROUTER_API_KEY);
+  console.log('NODE_ENV:', process.env.NODE_ENV || 'development');
+  console.log('PORT:', PORT);
+  console.log('=================');
+} else {
+  console.log('Server starting (production), PORT=', PORT);
+}
 
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -68,28 +72,21 @@ console.log('CORS allowed origins:', allowedOrigins);
 
 app.use(cors({
   origin: (origin, callback) => {
+    // Allow non-browser / same-origin tools (no Origin header)
     if (!origin) return callback(null, true);
 
     const isAllowed = allowedOrigins.some((allowed) => {
       if (!allowed) return false;
-      if (origin === allowed) return true;
-      if (origin.startsWith(allowed)) return true;
-      if (allowed.startsWith(origin)) return true;
-      return false;
+      // Exact origin match only (no startsWith looseness)
+      return origin === allowed;
     });
 
     if (isAllowed) return callback(null, true);
-
-    if ((process.env.NODE_ENV || 'development') !== 'production') {
-      console.log(`CORS allowing dev origin: ${origin}`);
-      return callback(null, true);
-    }
-
-    console.warn(`CORS blocked request from: ${origin}`);
-    callback(new Error(`CORS policy: ${origin} not allowed`));
+    console.warn('CORS blocked origin:', origin);
+    return callback(new Error(`CORS: Origin ${origin} not allowed`));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
 
@@ -108,7 +105,7 @@ const globalLimiter = rateLimit({
 
 const aiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many AI requests, please try again later.' },
@@ -126,7 +123,7 @@ const uploadLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many auth attempts, please try again later.' },
