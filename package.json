@@ -29,7 +29,7 @@
     "validate": "node backend/scripts/validate-project.mjs",
     "clean": "rm -rf node_modules package-lock.json && npm install",
     "audit": "npm audit",
-    "postinstall": "cd backend && npm install"
+    "postinstall": "node scripts/sanitize-ai-keys.mjs && cd backend && npm install"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
