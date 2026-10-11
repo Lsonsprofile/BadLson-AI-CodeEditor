@@ -8,7 +8,7 @@ import ChatPanel from './components/AI/ChatPanel';
 import SettingsPanel from './components/Settings/SettingsPanel';
 import AccountModal from './components/Auth/AccountModal';
 import { useWorkspaceStore } from './store/workspaceStore';
-import { getCurrentUser, isAuthenticated, getToken } from './auth/authService';
+import { getCurrentUser } from './auth/authService';
 import { CheckCircle } from 'lucide-react';
 
 function Toast() {

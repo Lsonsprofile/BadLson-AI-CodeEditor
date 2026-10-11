@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/fix-multi-download.mjs && vite build",
+    "build": "vite build",
     "build:backend": "cd backend && npm install",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -24,6 +24,7 @@
     "dev:server": "node scripts/start-server.mjs --watch",
     "wire:ai": "node scripts/wire-ai-prompts.mjs",
     "fix:chat": "node scripts/fix-chat-show-code.mjs",
+    "fix:explorer": "node scripts/fix-multi-download.mjs",
     "setup:all": "node scripts/setup-all.mjs",
     "validate": "node backend/scripts/validate-project.mjs",
     "clean": "rm -rf node_modules package-lock.json && npm install",
