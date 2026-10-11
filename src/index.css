@@ -110,3 +110,13 @@
 .animate-message {
   animation: messageSlideIn 0.3s ease-out;
 }
+
+/* Panel resize performance: skip pointer hit-testing while dragging */
+html.resizing-panels iframe,
+html.resizing-panels .monaco-editor,
+html.resizing-panels [data-panel-content] {
+  pointer-events: none !important;
+}
+html.resizing-panels * {
+  cursor: col-resize !important;
+}

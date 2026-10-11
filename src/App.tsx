@@ -145,7 +145,6 @@ function AppLayout() {
     return () => window.removeEventListener('toggle-account', handleToggleAccount);
   }, []);
 
-  // Keep width refs in sync with committed state
   useEffect(() => {
     widthRef.current.sidebar = sidebarWidth;
   }, [sidebarWidth]);
@@ -158,7 +157,6 @@ function AppLayout() {
     setIsResizing(true);
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    // Avoid expensive pointer hit-testing while dragging
     document.documentElement.classList.add('resizing-panels');
   }, []);
 
@@ -181,7 +179,7 @@ function AppLayout() {
         if (kind === 'sidebar') {
           applySidebarWidth(Math.max(220, Math.min(400, e.clientX)));
         } else if (kind === 'ai') {
-          applyAiWidth(Math.max(240, Math.min(420, window.innerWidth - e.clientX - 80));
+          applyAiWidth(Math.max(240, Math.min(420, window.innerWidth - e.clientX - 80)));
         }
       });
     };
@@ -194,7 +192,6 @@ function AppLayout() {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      // Commit final width once — single React update
       if (kind === 'sidebar') setSidebarWidth(widthRef.current.sidebar);
       if (kind === 'ai') setAiWidth(widthRef.current.ai);
       setIsResizing(false);
