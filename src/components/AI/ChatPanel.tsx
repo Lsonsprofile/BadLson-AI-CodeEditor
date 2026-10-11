@@ -1,13 +1,14 @@
 // src/components/AI/ChatPanel.tsx
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  Send, Bot, User, Loader2, Copy, Check,
+  Send, Bot, User, Loader2,
   ChevronDown, Code, Bug, Lightbulb, Wand2, Eye, Layout,
-  Circle, Wrench, Trash2,
+  Circle, Trash2,
 } from 'lucide-react';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 import { API_BASE_URL } from '@/services/api';
 import { useApiHealth } from '@/hooks/useApiHealth';
+import MarkdownContent from './MarkdownContent';
 
 interface ChatResponse {
   success: boolean;
@@ -15,176 +16,6 @@ interface ChatResponse {
   rawContent?: string;
   error?: string;
   files?: Array<{ path: string; content: string }>;
-}
-
-function extractCodeBlocks(content: string): Array<{ lang: string; code: string; filePath: string | null }> {
-  const blocks: Array<{ lang: string; code: string; filePath: string | null }> = [];
-  const re = /```([^\n`]*)\n([\s\S]*?)```/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    const header = (m[1] || '').trim();
-    const code = m[2] || '';
-    let lang = header;
-    let filePath: string | null = null;
-    const pathMatch = header.match(/(?:file|path)[:=\s]+([^\s]+)/i) || header.match(/^([\w./-]+\.\w+)$/);
-    if (pathMatch) {
-      filePath = pathMatch[1];
-      lang = header.replace(pathMatch[0], '').trim() || 'text';
-    }
-    const editMatch = header.match(/^edit:([^\s]+)/i);
-    if (editMatch) {
-      filePath = editMatch[1];
-      lang = 'text';
-    }
-    blocks.push({ lang, code, filePath });
-  }
-  return blocks;
-}
-
-function CodeBlock({
-  code, language, filePath, onApply,
-}: {
-  code: string;
-  language: string;
-  filePath: string | null;
-  onApply?: (path: string, content: string) => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const [applied, setApplied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch { /* ignore */ }
-  };
-
-  const handleApply = () => {
-    if (!filePath || !onApply) return;
-    onApply(filePath, code);
-    setApplied(true);
-    window.setTimeout(() => setApplied(false), 2000);
-  };
-
-  return (
-    <div className="my-2 rounded border border-[#30363d] bg-[#0d1117] overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[#161b22] border-b border-[#30363d]">
-        <span className="text-[11px] text-[#8b949e] font-mono truncate">
-          {filePath || language || 'code'}
-        </span>
-        <div className="flex items-center gap-1">
-          {filePath && onApply && (
-            <button
-              type="button"
-              onClick={handleApply}
-              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded border border-[#30363d] text-[#c9d1d9] hover:bg-[#21262d] hover:border-[#58a6ff]/40 transition"
-              title={`Apply to ${filePath}`}
-            >
-              {applied ? (
-                <><Check className="w-3 h-3 text-[#3fb950]" /> Applied</>
-              ) : (
-                <><Wrench className="w-3 h-3" /> Apply</>
-              )}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded border border-[#30363d] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition"
-          >
-            {copied ? <Check className="w-3 h-3 text-[#3fb950]" /> : <Copy className="w-3 h-3" />}
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        </div>
-      </div>
-      <pre className="p-3 overflow-x-auto text-[12px] leading-relaxed text-[#c9d1d9] font-mono max-h-80">
-        <code>{code}</code>
-      </pre>
-    </div>
-  );
-}
-
-function MessageContent({
-  content,
-  activeFile,
-  onApply,
-}: {
-  content: string;
-  activeFile: string | null;
-  onApply: (path: string, content: string) => void;
-}) {
-  const blocks = extractCodeBlocks(content);
-  if (blocks.length === 0) {
-    return <p className="text-[13px] leading-relaxed text-[#c9d1d9] whitespace-pre-wrap">{content}</p>;
-  }
-
-  const parts: React.ReactNode[] = [];
-  const re = /```([^\n`]*)\n([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let bi = 0;
-  while ((m = re.exec(content)) !== null) {
-    if (m.index > last) {
-      const text = content.slice(last, m.index).trim();
-      if (text) {
-        parts.push(
-          <p key={`t-${last}`} className="text-[13px] leading-relaxed text-[#c9d1d9] whitespace-pre-wrap mb-2">
-            {text}
-          </p>
-        );
-      }
-    }
-    const block = blocks[bi++];
-    if (block) {
-      parts.push(
-        <CodeBlock
-          key={`c-${m.index}`}
-          code={block.code}
-          language={block.lang}
-          filePath={block.filePath || activeFile}
-          onApply={onApply}
-        />
-      );
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < content.length) {
-    const text = content.slice(last).trim();
-    if (text) {
-      parts.push(
-        <p key="t-end" className="text-[13px] leading-relaxed text-[#c9d1d9] whitespace-pre-wrap mt-2">
-          {text}
-        </p>
-      );
-    }
-  }
-
-  const uniquePaths = blocks
-    .filter((b) => b.filePath)
-    .reduce<{ path: string; code: string }[]>((acc, b) => {
-      if (b.filePath && !acc.some((x) => x.path === b.filePath)) {
-        acc.push({ path: b.filePath, code: b.code });
-      }
-      return acc;
-    }, []);
-
-  return (
-    <div>
-      {parts}
-      {uniquePaths.length > 1 && (
-        <button
-          type="button"
-          onClick={() => {
-            for (const item of uniquePaths) onApply(item.path, item.code);
-          }}
-          className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded border border-[#30363d] text-[#c9d1d9] hover:bg-[#21262d] hover:border-[#58a6ff]/40 transition"
-        >
-          <Wrench className="w-3.5 h-3.5" /> Apply all ({uniquePaths.length} files)
-        </button>
-      )}
-    </div>
-  );
 }
 
 const SUGGESTIONS = [
@@ -396,7 +227,7 @@ export default function ChatPanel() {
                   {isUser ? (
                     <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-[#c9d1d9]">{msg.content}</p>
                   ) : (
-                    <MessageContent content={msg.content} activeFile={activeFile || null} onApply={applyOneFile} />
+                    <MarkdownContent content={msg.content} activeFile={activeFile || null} onApply={applyOneFile} />
                   )}
                 </div>
               </div>
