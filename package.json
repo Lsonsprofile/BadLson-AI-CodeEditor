@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/prune-dead-code.mjs && node scripts/fix-multi-download.mjs && vite build",
+    "build": "node scripts/prune-dead-code.mjs && node scripts/fix-typing-lag.mjs && node scripts/fix-multi-download.mjs && vite build",
     "build:backend": "cd backend && npm install",
     "lint": "eslint .",
     "preview": "vite preview",
