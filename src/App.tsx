@@ -1,5 +1,5 @@
 // src/App.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import Header from './components/Layout/Header';
 import FileExplorer from './components/Explorer/FileExplorer';
@@ -15,7 +15,7 @@ function Toast() {
   return (
     <div
       id="toast"
-      className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-[#12151c] text-slate-100 px-4 py-2 rounded-lg border border-white/10 shadow-2xl text-[11px] flex items-center gap-2 transition-all duration-300 opacity-0 pointer-events-none z-[300]"
+      className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2.5 bg-[#161b22] text-slate-200 rounded-lg border border-white/10 shadow-2xl text-[11px] flex items-center gap-2 transition-all duration-300 opacity-0 pointer-events-none z-[300]"
     >
       <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
       <span id="toastMsg">Action completed</span>
@@ -57,8 +57,12 @@ function AppLayout() {
   const [showAccount, setShowAccount] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [aiWidth, setAiWidth] = useState(340);
-  const [draggingSidebar, setDraggingSidebar] = useState(false);
-  const [draggingAi, setDraggingAi] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const aiPanelRef = useRef<HTMLDivElement>(null);
+  const dragKindRef = useRef<'sidebar' | 'ai' | null>(null);
+  const widthRef = useRef({ sidebar: 260, ai: 340 });
+  const rafRef = useRef<number | null>(null);
   const { aiPanelVisible, sidebarVisible } = useWorkspaceStore();
   const setAuthUser = useWorkspaceStore((state) => state.setAuthUser);
   const setWorkspaceState = useWorkspaceStore((state) => state.setWorkspaceState);
@@ -141,54 +145,97 @@ function AppLayout() {
     return () => window.removeEventListener('toggle-account', handleToggleAccount);
   }, []);
 
+  // Keep width refs in sync with committed state
   useEffect(() => {
+    widthRef.current.sidebar = sidebarWidth;
+  }, [sidebarWidth]);
+  useEffect(() => {
+    widthRef.current.ai = aiWidth;
+  }, [aiWidth]);
+
+  const startResize = useCallback((kind: 'sidebar' | 'ai') => {
+    dragKindRef.current = kind;
+    setIsResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    // Avoid expensive pointer hit-testing while dragging
+    document.documentElement.classList.add('resizing-panels');
+  }, []);
+
+  useEffect(() => {
+    const applySidebarWidth = (w: number) => {
+      widthRef.current.sidebar = w;
+      if (sidebarRef.current) sidebarRef.current.style.width = `${w}px`;
+    };
+    const applyAiWidth = (w: number) => {
+      widthRef.current.ai = w;
+      if (aiPanelRef.current) aiPanelRef.current.style.width = `${w}px`;
+    };
+
     const handleMouseMove = (e: MouseEvent) => {
-      if (draggingSidebar) {
-        setSidebarWidth(Math.max(220, Math.min(400, e.clientX)));
-      }
-      if (draggingAi) {
-        setAiWidth(Math.max(240, Math.min(420, window.innerWidth - e.clientX - 80)));
-      }
+      const kind = dragKindRef.current;
+      if (!kind) return;
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        if (kind === 'sidebar') {
+          applySidebarWidth(Math.max(220, Math.min(400, e.clientX)));
+        } else if (kind === 'ai') {
+          applyAiWidth(Math.max(240, Math.min(420, window.innerWidth - e.clientX - 80));
+        }
+      });
     };
 
     const handleMouseUp = () => {
-      setDraggingSidebar(false);
-      setDraggingAi(false);
+      if (!dragKindRef.current) return;
+      const kind = dragKindRef.current;
+      dragKindRef.current = null;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      // Commit final width once — single React update
+      if (kind === 'sidebar') setSidebarWidth(widthRef.current.sidebar);
+      if (kind === 'ai') setAiWidth(widthRef.current.ai);
+      setIsResizing(false);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      document.documentElement.classList.remove('resizing-panels');
     };
 
-    if (draggingSidebar || draggingAi) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-    }
-
+    document.addEventListener('mousemove', handleMouseMove, { passive: true });
+    document.addEventListener('mouseup', handleMouseUp);
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      document.documentElement.classList.remove('resizing-panels');
     };
-  }, [draggingSidebar, draggingAi]);
+  }, []);
 
   return (
     <div className="min-h-screen h-screen flex flex-col bg-[#0b0f19] text-slate-300 overflow-hidden">
       <Header />
 
-      <main className="flex-1 flex min-h-0 overflow-hidden">
+      <main className={`flex-1 flex min-h-0 overflow-hidden${isResizing ? ' select-none' : ''}`}>
         {sidebarVisible && (
           <>
             <div
+              ref={sidebarRef}
               style={{ width: sidebarWidth }}
-              className="shrink-0 min-w-[220px] max-w-[400px] border-r border-white/10 overflow-hidden flex flex-col"
+              className="shrink-0 min-w-[220px] max-w-[400px] border-r border-white/10 overflow-hidden flex flex-col will-change-[width]"
             >
               <FileExplorer />
             </div>
             <div
-              onMouseDown={() => setDraggingSidebar(true)}
-              className="w-1.5 shrink-0 bg-[#1e293b] hover:bg-indigo-600/60 cursor-col-resize transition"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize file explorer"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                startResize('sidebar');
+              }}
+              className="w-1.5 shrink-0 bg-[#1e293b] hover:bg-indigo-600/60 active:bg-indigo-500 cursor-col-resize transition-colors"
             />
           </>
         )}
@@ -198,12 +245,19 @@ function AppLayout() {
         {aiPanelVisible && (
           <>
             <div
-              onMouseDown={() => setDraggingAi(true)}
-              className="w-1.5 shrink-0 bg-[#1e293b] hover:bg-indigo-600/60 cursor-col-resize transition"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize AI panel"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                startResize('ai');
+              }}
+              className="w-1.5 shrink-0 bg-[#1e293b] hover:bg-indigo-600/60 active:bg-indigo-500 cursor-col-resize transition-colors"
             />
             <div
+              ref={aiPanelRef}
               style={{ width: aiWidth }}
-              className="shrink-0 min-w-[240px] max-w-[420px] overflow-hidden min-h-0 h-full"
+              className="shrink-0 min-w-[240px] max-w-[420px] overflow-hidden min-h-0 h-full will-change-[width]"
             >
               <ChatPanel />
             </div>
@@ -223,7 +277,7 @@ function AppLayout() {
 export default function App() {
   return (
     <Routes>
-      <Route path="*" element={<AppLayout />} />
+      <Route path="/*" element={<AppLayout />} />
     </Routes>
   );
 }
