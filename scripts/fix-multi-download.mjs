@@ -124,7 +124,8 @@ if (!s.includes('title={`Download ${selectedFiles.size} selected`}')) {
   if (s.includes(oldDep)) { s = s.replace(oldDep, newDep); n++; console.log('✓ paste deps'); }
 }
 
-if (!s.includes('Paste to Root')) {
+// IMPORTANT: guard must NOT match toast text containing "Paste to Root"
+if (!s.includes('contextMenu.root') && !s.includes('Paste Into Folder')) {
   const stOld = `node: TreeNode | null;\n  }>({ x: 0, y: 0, node: null });`;
   const stNew = `node: TreeNode | null;\n    root?: boolean;\n  }>({ x: 0, y: 0, node: null, root: false });`;
   if (s.includes(stOld)) { s = s.replace(stOld, stNew); n++; console.log('✓ context state'); }
@@ -140,7 +141,6 @@ if (!s.includes('Paste to Root')) {
   const cmNew = `{(contextMenu.node || contextMenu.root) && (\n        <div\n          ref={contextMenuRef}\n          className="fixed z-50 bg-[#161b22] border border-[#30363d] rounded-md shadow-xl py-1 w-48"`;
   if (s.includes(cmOld)) {
     s = s.replace(cmOld, cmNew);
-    // inject root menu body after opening style line
     const after = `style={{ top: contextMenu.y, left: contextMenu.x }}\n        >`;
     const rootBody = `style={{ top: contextMenu.y, left: contextMenu.x }}\n        >\n          {contextMenu.root && !contextMenu.node && (\n            <>\n              {clipboard.items.length > 0 && (\n                <button onClick={() => handlePaste(null)} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                </button>\n              )}\n              <button onClick={() => { setShowNewFile(true); setNewFileTargetFolder(null); setContextMenu((p) => ({ ...p, node: null, root: false })); }} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                <FilePlus className="w-3.5 h-3.5" /> New File\n              </button>\n              <button onClick={() => { setShowNewFolder(true); setNewFolderTarget(null); setContextMenu((p) => ({ ...p, node: null, root: false })); }} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                <FolderPlus className="w-3.5 h-3.5" /> New Folder\n              </button>\n            </>\n          )}`;
     if (s.includes(after)) { s = s.replace(after, rootBody); n++; console.log('✓ root shell'); }
