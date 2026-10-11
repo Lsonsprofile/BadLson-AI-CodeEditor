@@ -8,9 +8,10 @@
     "npm": ">=9.0.0"
   },
   "scripts": {
-    "start": "node server.mjs",
+    "start": "node scripts/sanitize-ai-keys.mjs && node server.mjs",
     "dev": "node --watch server.mjs",
-    "build": "echo 'No build step required for backend'"
+    "build": "echo 'No build step required for backend'",
+    "postinstall": "node scripts/sanitize-ai-keys.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
