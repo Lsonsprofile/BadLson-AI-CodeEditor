@@ -10,19 +10,33 @@ import {
 export async function handleChat({
   message,
   projectFiles = {},
+  files = {}, // frontend may send "files" instead of projectFiles
   chatHistory = [],
   provider = 'openrouter',
   preferredModel = null,
+  preferredOpenRouterModel = null,
   activeFile = null,
   recentFiles = [],
+  openFiles = [],
   consoleErrors = [],
   buildErrors = [],
   selectedCode = null,
   cursorPosition = null,
   folders = [],
-}) {
+} = {}) {
+  // Merge aliases so AI always sees project content
+  const mergedFiles =
+    Object.keys(projectFiles || {}).length > 0
+      ? projectFiles
+      : files || {};
+  projectFiles = mergedFiles;
+  if (!preferredModel && preferredOpenRouterModel) preferredModel = preferredOpenRouterModel;
+  if ((!recentFiles || recentFiles.length === 0) && openFiles?.length) {
+    recentFiles = openFiles;
+  }
+
   console.log(
-    `[AI Controller] handleChat | msg="${(message || '').substring(0, 60)}" | files=${Object.keys(projectFiles).length} | provider=${provider}`
+    `[AI Controller] handleChat | msg="${(message || '').substring(0, 60)}" | files=${Object.keys(projectFiles).length} | folders=${(folders || []).length} | provider=${provider}`
   );
 
   const trimmed = (message || '').trim().toLowerCase();
@@ -84,122 +98,88 @@ export async function handleChat({
   }
 
   const parsed = parseAiResponse(response.content);
-  let updatedFiles = {};
-  let appliedEdits = [];
-  let failedEdits = [];
-  const changedOnly = {};
+  let edits = { applied: [], failed: [] };
 
-  // Client applies only when user clicks Apply — do not auto-merge server-side
+  // Manual apply only from the UI — never auto-write
   const skipApply = true;
-
-  if (
-    !skipApply &&
-    ((parsed.edits && parsed.edits.length > 0) ||
-      (parsed.patches && parsed.patches.length > 0))
-  ) {
-    const result = applyEdits(
-      projectFiles,
-      parsed.edits || [],
-      parsed.patches || [],
-      { activeFile }
-    );
-    updatedFiles = result.updatedFiles;
-    appliedEdits = result.applied;
-    failedEdits = result.failed;
+  if (!skipApply && parsed.edits?.length) {
+    edits = applyEdits(parsed.edits, projectFiles);
   }
-
-  for (const [filename, content] of Object.entries(updatedFiles)) {
-    if (projectFiles[filename] !== content) {
-      changedOnly[filename] = content;
-    }
-  }
-
-  if (mode === 'general' && Object.keys(changedOnly).length === 0) {
-    return {
-      success: true,
-      content: response.content,
-      message: response.content,
-      response: response.content,
-      rawContent: response.content,
-      provider: response.provider,
-      model: response.model,
-      mode: 'general',
-      edits: { applied: [], failed: [] },
-      timestamp: new Date().toISOString(),
-    };
-  }
-
-  const fullText =
-    response.content ||
-    parsed.message ||
-    "I couldn't generate a proper response. Please try again.";
 
   return {
     success: true,
-    content: fullText,
-    message: fullText,
-    response: fullText,
+    content: parsed.displayText || response.content,
+    message: parsed.displayText || response.content,
+    response: parsed.displayText || response.content,
     rawContent: response.content,
-    provider: response.provider,
-    model: response.model,
-    mode: parsed.mode || mode,
-    edits: {
-      applied: appliedEdits,
-      failed: failedEdits,
-    },
-    updatedFiles:
-      Object.keys(changedOnly).length > 0 ? changedOnly : undefined,
-    wireframes:
-      parsed.wireframes && parsed.wireframes.length > 0
-        ? parsed.wireframes
-        : undefined,
-    fileContext: {
-      analyzed: true,
-      fileCount: Object.keys(projectFiles).length,
-      htmlAnalyzed: !!projectFiles['index.html'],
-    },
+    provider: response.provider || provider,
+    model: response.model || preferredModel,
+    mode,
+    edits,
     timestamp: new Date().toISOString(),
   };
 }
 
 export async function handleStream(args) {
-  const { onChunk, onComplete, ...chatArgs } = args || {};
-  try {
-    const result = await handleChat(chatArgs);
-    const text = result.content || result.response || '';
-    if (typeof onChunk === 'function' && text) onChunk(text);
-    if (typeof onComplete === 'function') onComplete(result);
-    return result;
-  } catch (error) {
-    if (typeof onComplete === 'function') {
-      onComplete({
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    throw error;
-  }
+  const {
+    message,
+    projectFiles = {},
+    files = {},
+    onChunk,
+    onComplete,
+    provider = 'openrouter',
+    preferredModel = null,
+    activeFile = null,
+    folders = [],
+    chatHistory = [],
+  } = args || {};
+
+  const merged =
+    Object.keys(projectFiles || {}).length > 0 ? projectFiles : files || {};
+
+  const { messages, mode } = buildPrompt(merged, message, {
+    activeFile,
+    folders,
+    chatHistory,
+  });
+
+  await streamWithFallback(messages, provider, preferredModel, {
+    onChunk,
+    onComplete: (result) => {
+      if (onComplete) onComplete({ ...result, mode });
+    },
+  });
 }
 
 export async function handleAnalyze(body = {}) {
-  const message =
-    body.message ||
-    body.prompt ||
-    'Analyze this project. Summarize structure, main files, and suggest improvements.';
-  return handleChat({
-    ...body,
-    message,
+  const projectFiles = body.projectFiles || body.files || {};
+  const { messages } = buildPrompt(projectFiles, body.message || 'Analyze this project', {
+    activeFile: body.activeFile || null,
+    folders: body.folders || [],
   });
+  const response = await callWithFallback(messages, body.provider || 'openrouter', body.preferredModel || null, projectFiles);
+  return {
+    analysis: response?.content || '',
+    provider: response?.provider,
+    model: response?.model,
+  };
 }
 
 export async function handleExplain(body = {}) {
-  const code = body.code || body.selectedCode || '';
-  const question = body.message || body.question || 'Explain this code clearly.';
-  const message = code
-    ? `Explain the following code:\n\n\`\`\`\n${code}\n\`\`\`\n\n${question}`
-    : question;
-  return handleChat({
-    ...body,
-    message,
-  });
+  const projectFiles = body.projectFiles || body.files || {};
+  const filename = body.filename || body.activeFile || 'the selected file';
+  const { messages } = buildPrompt(
+    projectFiles,
+    body.message || `Explain ${filename} in detail`,
+    {
+      activeFile: body.activeFile || filename,
+      folders: body.folders || [],
+    }
+  );
+  const response = await callWithFallback(messages, body.provider || 'openrouter', body.preferredModel || null, projectFiles);
+  return {
+    explanation: response?.content || '',
+    provider: response?.provider,
+    model: response?.model,
+  };
 }
