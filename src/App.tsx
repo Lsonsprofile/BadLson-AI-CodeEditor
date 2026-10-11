@@ -24,9 +24,13 @@ function Toast() {
 }
 
 function StatusBar() {
-  const { files, activeFile, sidebarVisible, aiPanelVisible } = useWorkspaceStore();
-  const activeContent = files[activeFile] || '';
-  const lines = activeContent.split('\n').length;
+  const activeFile = useWorkspaceStore((s) => s.activeFile);
+  const sidebarVisible = useWorkspaceStore((s) => s.sidebarVisible);
+  const aiPanelVisible = useWorkspaceStore((s) => s.aiPanelVisible);
+  const activeContent = useWorkspaceStore((s) =>
+    activeFile ? s.files[activeFile] || '' : ''
+  );
+  const lines = activeContent ? activeContent.split('\n').length : 0;
   const chars = activeContent.length;
 
   return (
@@ -63,10 +67,11 @@ function AppLayout() {
   const dragKindRef = useRef<'sidebar' | 'ai' | null>(null);
   const widthRef = useRef({ sidebar: 260, ai: 340 });
   const rafRef = useRef<number | null>(null);
-  const { aiPanelVisible, sidebarVisible } = useWorkspaceStore();
-  const setAuthUser = useWorkspaceStore((state) => state.setAuthUser);
-  const setWorkspaceState = useWorkspaceStore((state) => state.setWorkspaceState);
-  const authUser = useWorkspaceStore((state) => state.authUser);
+  const aiPanelVisible = useWorkspaceStore((s) => s.aiPanelVisible);
+  const sidebarVisible = useWorkspaceStore((s) => s.sidebarVisible);
+  const setAuthUser = useWorkspaceStore((s) => s.setAuthUser);
+  const setWorkspaceState = useWorkspaceStore((s) => s.setWorkspaceState);
+  const authUser = useWorkspaceStore((s) => s.authUser);
 
   useEffect(() => {
     const user = getCurrentUser();
