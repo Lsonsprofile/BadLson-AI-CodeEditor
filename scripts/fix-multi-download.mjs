@@ -93,7 +93,7 @@ if (s.includes(`setClipboard((prev) => ({ items: [...prev.items, contextMenu.nod
 
 if (!s.includes('Ensure destination parent folders exist')) {
   const needle = `        } else {\n          const ext = srcPath.slice(srcPath.lastIndexOf('.') + 1).toLowerCase();`;
-  const insert = `        } else {\n          // Ensure destination parent folders exist in the tree\n          if (targetFolder) {\n            const parts = targetFolder.split('/');\n            let built = '';\n            for (const part of parts) {\n              built = built ? built + '/' + part : part;\n              createFolder(built);\n            }\n          }\n          const ext = srcPath.slice(srcPath.lastIndexOf('.') + 1).toLowerCase();`;
+  const insert = `        } else {\n          if (targetFolder) {\n            const parts = targetFolder.split('/');\n            let built = '';\n            for (const part of parts) {\n              built = built ? built + '/' + part : part;\n              createFolder(built);\n            }\n          }\n          const ext = srcPath.slice(srcPath.lastIndexOf('.') + 1).toLowerCase();`;
   if (s.includes(needle)) { s = s.replace(needle, insert); n++; console.log('✓ parent folders'); }
 }
 
@@ -117,23 +117,20 @@ if (!s.includes('title={`Download ${selectedFiles.size} selected`}')) {
 
 {
   const oldC = `if (clipboard.mode === 'cut') setClipboard({ items: [], mode: 'copy' });\n      setContextMenu((prev) => ({ ...prev, node: null }));`;
-  const newC = `if (clipboard.mode === 'cut') {\n        setClipboard({ items: [], mode: 'copy' });\n        clearSelection();\n      } else {\n        showToast('Pasted ' + clipboard.items.length + ' item(s)', 'success');\n      }\n      setContextMenu((prev) => ({ ...prev, node: null }));`;
+  const newC = `if (clipboard.mode === 'cut') {\n        setClipboard({ items: [], mode: 'copy' });\n        clearSelection();\n      } else {\n        showToast('Pasted ' + clipboard.items.length + ' item(s)', 'success');\n      }\n      setContextMenu({ x: 0, y: 0, node: null, root: false });`;
   if (s.includes(oldC)) { s = s.replace(oldC, newC); n++; console.log('✓ clear after cut'); }
   const oldDep = `[clipboard, fileNames, folders, files, createFolder, updateFile, getAllFilesInNode, showToast, deleteFolderContents, deleteFolder, deleteFile]`;
   const newDep = `[clipboard, fileNames, folders, files, createFolder, updateFile, getAllFilesInNode, showToast, deleteFolderContents, deleteFolder, deleteFile, clearSelection]`;
   if (s.includes(oldDep)) { s = s.replace(oldDep, newDep); n++; console.log('✓ paste deps'); }
 }
 
-// IMPORTANT: guard must NOT match toast text containing "Paste to Root"
 if (!s.includes('contextMenu.root') && !s.includes('Paste Into Folder')) {
   const stOld = `node: TreeNode | null;\n  }>({ x: 0, y: 0, node: null });`;
   const stNew = `node: TreeNode | null;\n    root?: boolean;\n  }>({ x: 0, y: 0, node: null, root: false });`;
   if (s.includes(stOld)) { s = s.replace(stOld, stNew); n++; console.log('✓ context state'); }
-
   s = s.replace(/contextMenu\.node\.type === 'file'/g, "contextMenu.node?.type === 'file'");
   s = s.replace(/contextMenu\.node\.type === 'folder'/g, "contextMenu.node?.type === 'folder'");
 
-  // Wrap multi-button paste block in a fragment so JSX is valid
   const blockOld = `{clipboard.items.length > 0 && (\n                <button\n                  onClick={() => handlePaste(contextMenu.node!.name)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste Here\n                </button>\n              )}`;
   const blockNew = `{clipboard.items.length > 0 && (\n                <>\n                  <button\n                    onClick={() => handlePaste(contextMenu.node!.name)}\n                    className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                  >\n                    <ClipboardPaste className="w-3.5 h-3.5" /> Paste Into Folder\n                  </button>\n                  <button\n                    onClick={() => handlePaste(null)}\n                    className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                  >\n                    <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                  </button>\n                </>\n              )}`;
   if (s.includes(blockOld)) { s = s.replace(blockOld, blockNew); n++; console.log('✓ folder paste root'); }
@@ -143,14 +140,13 @@ if (!s.includes('contextMenu.root') && !s.includes('Paste Into Folder')) {
   if (s.includes(cmOld)) {
     s = s.replace(cmOld, cmNew);
     const after = `style={{ top: contextMenu.y, left: contextMenu.x }}\n        >`;
-    const rootBody = `style={{ top: contextMenu.y, left: contextMenu.x }}\n        >\n          {contextMenu.root && !contextMenu.node && (\n            <>\n              {clipboard.items.length > 0 && (\n                <button onClick={() => handlePaste(null)} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                </button>\n              )}\n              <button onClick={() => { setShowNewFile(true); setNewFileTargetFolder(null); setContextMenu((p) => ({ ...p, node: null, root: false })); }} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                <FilePlus className="w-3.5 h-3.5" /> New File\n              </button>\n              <button onClick={() => { setShowNewFolder(true); setNewFolderTarget(null); setContextMenu((p) => ({ ...p, node: null, root: false })); }} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                <FolderPlus className="w-3.5 h-3.5" /> New Folder\n              </button>\n            </>\n          )}`;
+    const rootBody = `style={{ top: contextMenu.y, left: contextMenu.x }}\n        >\n          {contextMenu.root && !contextMenu.node && (\n            <>\n              {clipboard.items.length > 0 && (\n                <button onClick={() => handlePaste(null)} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                </button>\n              )}\n              <button onClick={() => { setShowNewFile(true); setNewFileTargetFolder(null); setContextMenu({ x: 0, y: 0, node: null, root: false }); }} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                <FilePlus className="w-3.5 h-3.5" /> New File\n              </button>\n              <button onClick={() => { setShowNewFolder(true); setNewFolderTarget(null); setContextMenu({ x: 0, y: 0, node: null, root: false }); }} className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition">\n                <FolderPlus className="w-3.5 h-3.5" /> New Folder\n              </button>\n            </>\n          )}`;
     if (s.includes(after)) { s = s.replace(after, rootBody); n++; console.log('✓ root shell'); }
   }
 
   if (!s.includes('root: true')) {
     const m = s.match(/<div\s+ref=\{scrollContainerRef\}[^>]*>/);
     if (m && !m[0].includes('onContextMenu')) {
-      // Must close with }}>  (function body } + JSX expr } + tag >)
       s = s.replace(m[0], m[0].slice(0, -1) + ` onContextMenu={(e) => {\n          if ((e.target as HTMLElement).closest('[data-tree-item]')) return;\n          e.preventDefault();\n          setContextMenu({ x: e.clientX, y: e.clientY, node: null, root: true });\n        }}>`);
       n++; console.log('✓ empty area menu');
     }
@@ -166,13 +162,67 @@ if (!s.includes('contextMenu.root') && !s.includes('Paste Into Folder')) {
   if (s.includes(nodeOpen)) { s = s.replace(nodeOpen, nodeOpenFix); n++; console.log('✓ node root:false'); }
 }
 
-// Fix invalid JSX: two buttons under && without fragment
 const broken = `{clipboard.items.length > 0 && (\n                <button\n                  onClick={() => handlePaste(contextMenu.node!.name)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste Into Folder\n                </button>\n                <button\n                  onClick={() => handlePaste(null)}\n                  className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                >\n                  <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                </button>\n              )}`;
 const fixed = `{clipboard.items.length > 0 && (\n                <>\n                  <button\n                    onClick={() => handlePaste(contextMenu.node!.name)}\n                    className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                  >\n                    <ClipboardPaste className="w-3.5 h-3.5" /> Paste Into Folder\n                  </button>\n                  <button\n                    onClick={() => handlePaste(null)}\n                    className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"\n                  >\n                    <ClipboardPaste className="w-3.5 h-3.5" /> Paste to Root\n                  </button>\n                </>\n              )}`;
 if (s.includes(broken)) {
   s = s.replace(broken, fixed);
   n++;
   console.log('✓ fragment wrap paste buttons');
+}
+
+// Context menu UX: close properly + button styling
+if (!s.includes('const closeContextMenu = useCallback')) {
+  const oldClose = `  useEffect(() => {\n    const handleClick = (e: MouseEvent) => {\n      if (\n        contextMenuRef.current &&\n        !contextMenuRef.current.contains(e.target as Node)\n      ) {\n        setContextMenu((prev) => ({ ...prev, node: null }));\n      }\n    };\n    document.addEventListener('mousedown', handleClick);\n    return () => document.removeEventListener('mousedown', handleClick);\n  }, []);`;
+  const newClose = `  const closeContextMenu = useCallback(() => {\n    setContextMenu({ x: 0, y: 0, node: null, root: false });\n  }, []);\n\n  useEffect(() => {\n    const handleClick = (e: MouseEvent) => {\n      if (\n        contextMenuRef.current &&\n        !contextMenuRef.current.contains(e.target as Node)\n      ) {\n        closeContextMenu();\n      }\n    };\n    const handleEsc = (e: KeyboardEvent) => {\n      if (e.key === 'Escape') closeContextMenu();\n    };\n    document.addEventListener('mousedown', handleClick);\n    document.addEventListener('keydown', handleEsc);\n    return () => {\n      document.removeEventListener('mousedown', handleClick);\n      document.removeEventListener('keydown', handleEsc);\n    };\n  }, [closeContextMenu]);`;
+  if (s.includes(oldClose)) {
+    s = s.replace(oldClose, newClose);
+    n++;
+    console.log('✓ closeContextMenu');
+  }
+}
+
+if (s.includes('setContextMenu((prev) => ({ ...prev, node: null }));')) {
+  s = s.split('setContextMenu((prev) => ({ ...prev, node: null }));').join(
+    'setContextMenu({ x: 0, y: 0, node: null, root: false });'
+  );
+  n++;
+  console.log('✓ normalize menu close');
+}
+if (s.includes('setContextMenu((p) => ({ ...p, node: null, root: false }));')) {
+  s = s.split('setContextMenu((p) => ({ ...p, node: null, root: false }));').join(
+    'setContextMenu({ x: 0, y: 0, node: null, root: false });'
+  );
+  n++;
+  console.log('✓ normalize root close');
+}
+
+const shellOld = `className="fixed z-50 bg-[#161b22] border border-[#30363d] rounded-md shadow-xl py-1 w-48"`;
+const shellNew = `className="fixed z-50 min-w-[200px] max-w-[260px] bg-[#161b22] border border-[#30363d] rounded-lg shadow-2xl py-1.5 overflow-hidden" onMouseDown={(e) => e.stopPropagation()}`;
+if (s.includes(shellOld)) {
+  s = s.replace(shellOld, shellNew);
+  n++;
+  console.log('✓ menu shell style');
+}
+const shellOld2 = `className="fixed z-50 bg-[#161b22] border border-[#30363d] rounded-md shadow-xl py-1 w-44"`;
+if (s.includes(shellOld2)) {
+  s = s.replace(shellOld2, shellNew);
+  n++;
+  console.log('✓ menu shell style w-44');
+}
+
+const btnOld = `className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#c9d1d9] hover:bg-[#21262d] transition"`;
+const btnNew = `type="button" className="flex items-center gap-2.5 w-full px-3 py-2 text-left text-[12px] font-medium text-[#c9d1d9] hover:bg-[#1f6feb]/15 hover:text-white transition-colors"`;
+if (s.includes(btnOld)) {
+  s = s.split(btnOld).join(btnNew);
+  n++;
+  console.log('✓ menu button style');
+}
+const delOld = `className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-[#f85149] hover:bg-[#21262d] transition"`;
+const delNew = `type="button" className="flex items-center gap-2.5 w-full px-3 py-2 text-left text-[12px] font-medium text-[#f85149] hover:bg-[#f85149]/15 transition-colors"`;
+if (s.includes(delOld)) {
+  s = s.split(delOld).join(delNew);
+  n++;
+  console.log('✓ delete button style');
 }
 
 fs.writeFileSync(target, s);
